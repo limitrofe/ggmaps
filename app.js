@@ -1,6 +1,6 @@
 'use strict';
 
-const mapboxToken = window.MAPBOX_TOKEN || localStorage.getItem('MAPBOX_TOKEN') || '';
+let mapboxToken = window.MAPBOX_TOKEN || localStorage.getItem('MAPBOX_TOKEN') || '';
 const mapboxStyle = 'mapbox://styles/limitrofe/cmopsybpt004601s698r83pk0';
 const outputWidth = 650;
 const textPaddingX = 24;
@@ -79,8 +79,6 @@ const previewSource = document.getElementById('preview-source');
 const exportFrame = document.getElementById('export-frame');
 const mapsStack = document.getElementById('maps-stack');
 
-mapboxgl.accessToken = mapboxToken;
-
 const scenes = [];
 let activeSceneIndex = 0;
 let storyLocation = {lng: -47.8825, lat: -15.7942};
@@ -99,6 +97,24 @@ const imageCache = new Map();
 
 function setStatus(message) {
     statusEl.textContent = message;
+}
+
+async function resolveMapboxToken() {
+    if (mapboxToken) {
+        return mapboxToken;
+    }
+
+    try {
+        const response = await fetch('/api/mapbox-token');
+        if (!response.ok) {
+            return '';
+        }
+
+        const data = await response.json();
+        return data.token || '';
+    } catch {
+        return '';
+    }
 }
 
 function normalizeText(value) {
@@ -2159,231 +2175,245 @@ async function exportJpg() {
     }
 }
 
-for (let index = 0; index < maxScenes; index += 1) {
-    scenes.push(createScene(index));
+async function initializeApp() {
+    setStatus('Carregando Mapbox...');
+    mapboxToken = await resolveMapboxToken();
+
+    if (!mapboxToken) {
+        setStatus('Token da Mapbox não configurado. Adicione MAPBOX_TOKEN na Vercel.');
+        return;
+    }
+
+    mapboxgl.accessToken = mapboxToken;
+
+    for (let index = 0; index < maxScenes; index += 1) {
+        scenes.push(createScene(index));
+    }
+
+    window.editorScenes = scenes;
+
+    [titleInput, deckInput, sourceInput].forEach(input => {
+        input.addEventListener('input', setPreviewText);
+    });
+
+    sceneCountInput.addEventListener('change', refreshSceneVisibility);
+    activeSceneInput.addEventListener('change', event => setActiveScene(Number.parseInt(event.target.value, 10) || 0));
+    mapHeightInput.addEventListener('input', event => setSceneHeight(event.target.value));
+    heightPresetButtons.forEach(button => {
+        button.addEventListener('click', () => setSceneHeight(button.dataset.height));
+    });
+    searchButton.addEventListener('click', searchPlace);
+    coordinateButton.addEventListener('click', goToCoordinateFields);
+    zoomOutButton.addEventListener('click', () => changeZoom(-1));
+    zoomInButton.addEventListener('click', () => changeZoom(1));
+    markerSourceInput.addEventListener('change', event => {
+        const scene = getActiveScene();
+        scene.markerSource = scene.index === 0 ? 'search' : event.target.value;
+        syncControlsFromScene();
+        updateSceneAnnotation(scene);
+        updateSceneLocator(scene);
+    });
+    markerCenterButton.addEventListener('click', () => setCustomMarkerForActiveScene(getActiveScene().map.getCenter()));
+    markerClearButton.addEventListener('click', clearMarkerForActiveScene);
+    markerStyleInput.addEventListener('change', event => {
+        getActiveScene().markerStyle = event.target.value;
+        updateSceneAnnotation(getActiveScene());
+    });
+    markerLabelInput.addEventListener('input', event => {
+        getActiveScene().markerLabel = event.target.value;
+        updateSceneAnnotation(getActiveScene());
+    });
+    mapLabelsInput.addEventListener('change', event => {
+        const scene = getActiveScene();
+        scene.showMapLabels = event.target.value === 'show';
+        applyMapLabelVisibility(scene);
+        setStatus(scene.showMapLabels
+            ? `Nomes gerais ativados na cena ${scene.index + 1}.`
+            : `Nomes gerais ocultados na cena ${scene.index + 1}.`);
+    });
+    sceneDrawingsInput.addEventListener('change', event => {
+        const scene = getActiveScene();
+        scene.showDrawings = event.target.value === 'show';
+        redrawDrawings(scene);
+        setStatus(scene.showDrawings
+            ? `Linhas exibidas na cena ${scene.index + 1}.`
+            : `Linhas ocultadas na cena ${scene.index + 1}.`);
+    });
+    labelAddButton.addEventListener('click', () => {
+        if (labelPlacementSceneIndex === activeSceneIndex) {
+            setLabelPlacementMode(null);
+            setStatus('Inserção de rótulo manual cancelada.');
+            return;
+        }
+
+        if (!normalizeText(editorialLabelInput.value) && editorialSymbolInput.value === 'none') {
+            setStatus('O item precisa ter texto ou símbolo.');
+            return;
+        }
+
+        if (editorialSymbolInput.value === 'image' && !editorialImageData) {
+            setStatus('Faça upload de um PNG antes de inserir esse símbolo.');
+            return;
+        }
+
+        setLabelPlacementMode(activeSceneIndex);
+        setStatus(`Clique no mapa da cena ${activeSceneIndex + 1} para inserir o elemento manual.`);
+    });
+    labelClearButton.addEventListener('click', clearEditorialLabelsForActiveScene);
+    annotationDeleteButton.addEventListener('click', () => {
+        const scene = getActiveScene();
+
+        scene.editorialLabels = scene.editorialLabels.filter(annotation => annotation.id !== selectedAnnotationId);
+        selectedAnnotationId = scene.editorialLabels[0]?.id || null;
+        updateSceneAnnotation(scene);
+        renderAnnotationPanel();
+        setStatus(`Item removido da cena ${scene.index + 1}.`);
+    });
+    selectedLabelTextInput.addEventListener('input', event => {
+        syncSelectedAnnotation(annotation => {
+            annotation.text = event.target.value;
+        });
+    });
+    selectedSymbolInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => {
+            annotation.symbol = event.target.value;
+            if (annotation.symbol === 'image' && editorialImageData) {
+                annotation.imageData = editorialImageData;
+                loadImage(editorialImageData);
+            }
+        });
+    });
+    selectedLabelPositionInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => {
+            annotation.textPosition = event.target.value;
+
+            if (annotation.textPosition !== 'custom') {
+                const offset = getDefaultLabelOffset(annotation.textPosition);
+                annotation.offsetX = offset.x;
+                annotation.offsetY = offset.y;
+            }
+        });
+    });
+    selectedLabelLatInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => {
+            const value = Number.parseFloat(String(event.target.value).replace(',', '.'));
+            if (isValidLatitude(value)) {
+                annotation.lat = value;
+            }
+        });
+    });
+    selectedLabelLngInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => {
+            const value = Number.parseFloat(String(event.target.value).replace(',', '.'));
+            if (isValidLongitude(value)) {
+                annotation.lng = value;
+            }
+        });
+    });
+    editorialImageInput.addEventListener('change', event => {
+        const file = event.target.files?.[0];
+
+        if (!file) {
+            editorialImageData = '';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            editorialImageData = String(reader.result || '');
+            loadImage(editorialImageData);
+            const selected = getSelectedAnnotation();
+
+            if (selected?.symbol === 'image') {
+                selected.imageData = editorialImageData;
+                updateSceneAnnotation(getActiveScene());
+                renderAnnotationPanel();
+            }
+
+            setStatus('PNG carregado para o símbolo manual.');
+        };
+        reader.onerror = () => setStatus('Não foi possível carregar a imagem.');
+        reader.readAsDataURL(file);
+    });
+    locatorModeInput.addEventListener('change', event => {
+        const scene = getActiveScene();
+        scene.locator.mode = event.target.value;
+        updateSceneLocator(scene);
+    });
+    locatorQueryInput.addEventListener('input', event => {
+        getActiveScene().locator.query = event.target.value;
+    });
+    locatorSearchButton.addEventListener('click', applyLocatorArea);
+    locatorFocusButton.addEventListener('click', () => {
+        applyLocatorFocus(getActiveScene());
+        setStatus(`Foco do localizador atualizado na cena ${getActiveScene().index + 1}.`);
+    });
+    drawingStartButton.addEventListener('click', () => {
+        const scene = getActiveScene();
+        if (!scene) return;
+        if (drawingSceneIndex === scene.index) {
+            finalizeDrawing(scene);
+            return;
+        }
+        if (drawingSceneIndex !== null) {
+            const prev = scenes[drawingSceneIndex];
+            if (prev) { prev.activeDrawing = null; redrawDrawings(prev); }
+            setDrawingMode(null);
+        }
+        scene.activeDrawing = {
+            id: drawingIdCounter++,
+            points: [],
+            color: drawingColorInput.value,
+            width: Math.max(1, Math.min(100, Number(drawingWidthInput.value) || 3)),
+            dashed: drawingStyleInput.value === 'dashed',
+            arrow: drawingArrowInput.value
+        };
+        setDrawingMode(scene.index);
+        setStatus('Clique no mapa para adicionar pontos. Duplo clique ou "Fechar linha" para finalizar.');
+    });
+
+    drawingClearButton.addEventListener('click', () => {
+        drawings = [];
+        scenes.forEach(s => { s.activeDrawing = null; redrawDrawings(s); });
+        if (drawingSceneIndex !== null) setDrawingMode(null);
+        renderDrawingList();
+    });
+
+    sceneShapesInput.addEventListener('change', event => {
+        const scene = getActiveScene();
+        scene.showShapes = event.target.value === 'show';
+        redrawDrawings(scene);
+        setStatus(scene.showShapes ? `Formas exibidas na cena ${scene.index + 1}.` : `Formas ocultadas na cena ${scene.index + 1}.`);
+    });
+    shapeStartButton.addEventListener('click', () => {
+        const scene = getActiveScene();
+        if (!scene) return;
+        if (shapeMode === scene.index) {
+            setShapeMode(null);
+            setStatus('Inserção de forma cancelada.');
+            return;
+        }
+        setShapeMode(scene.index);
+        setStatus('Clique no mapa para definir o centro da forma.');
+    });
+    shapeClearButton.addEventListener('click', () => {
+        shapes = [];
+        scenes.forEach(s => { s.previewShape = null; redrawDrawings(s); });
+        if (shapeMode !== null) setShapeMode(null);
+        renderShapeList();
+    });
+    downloadButton.addEventListener('click', exportJpg);
+
+    searchInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            searchPlace();
+        }
+    });
+
+    setPreviewText();
+    refreshSceneVisibility();
+    setActiveScene(0);
 }
 
-window.editorScenes = scenes;
-
-[titleInput, deckInput, sourceInput].forEach(input => {
-    input.addEventListener('input', setPreviewText);
-});
-
-sceneCountInput.addEventListener('change', refreshSceneVisibility);
-activeSceneInput.addEventListener('change', event => setActiveScene(Number.parseInt(event.target.value, 10) || 0));
-mapHeightInput.addEventListener('input', event => setSceneHeight(event.target.value));
-heightPresetButtons.forEach(button => {
-    button.addEventListener('click', () => setSceneHeight(button.dataset.height));
-});
-searchButton.addEventListener('click', searchPlace);
-coordinateButton.addEventListener('click', goToCoordinateFields);
-zoomOutButton.addEventListener('click', () => changeZoom(-1));
-zoomInButton.addEventListener('click', () => changeZoom(1));
-markerSourceInput.addEventListener('change', event => {
-    const scene = getActiveScene();
-    scene.markerSource = scene.index === 0 ? 'search' : event.target.value;
-    syncControlsFromScene();
-    updateSceneAnnotation(scene);
-    updateSceneLocator(scene);
-});
-markerCenterButton.addEventListener('click', () => setCustomMarkerForActiveScene(getActiveScene().map.getCenter()));
-markerClearButton.addEventListener('click', clearMarkerForActiveScene);
-markerStyleInput.addEventListener('change', event => {
-    getActiveScene().markerStyle = event.target.value;
-    updateSceneAnnotation(getActiveScene());
-});
-markerLabelInput.addEventListener('input', event => {
-    getActiveScene().markerLabel = event.target.value;
-    updateSceneAnnotation(getActiveScene());
-});
-mapLabelsInput.addEventListener('change', event => {
-    const scene = getActiveScene();
-    scene.showMapLabels = event.target.value === 'show';
-    applyMapLabelVisibility(scene);
-    setStatus(scene.showMapLabels
-        ? `Nomes gerais ativados na cena ${scene.index + 1}.`
-        : `Nomes gerais ocultados na cena ${scene.index + 1}.`);
-});
-sceneDrawingsInput.addEventListener('change', event => {
-    const scene = getActiveScene();
-    scene.showDrawings = event.target.value === 'show';
-    redrawDrawings(scene);
-    setStatus(scene.showDrawings
-        ? `Linhas exibidas na cena ${scene.index + 1}.`
-        : `Linhas ocultadas na cena ${scene.index + 1}.`);
-});
-labelAddButton.addEventListener('click', () => {
-    if (labelPlacementSceneIndex === activeSceneIndex) {
-        setLabelPlacementMode(null);
-        setStatus('Inserção de rótulo manual cancelada.');
-        return;
-    }
-
-    if (!normalizeText(editorialLabelInput.value) && editorialSymbolInput.value === 'none') {
-        setStatus('O item precisa ter texto ou símbolo.');
-        return;
-    }
-
-    if (editorialSymbolInput.value === 'image' && !editorialImageData) {
-        setStatus('Faça upload de um PNG antes de inserir esse símbolo.');
-        return;
-    }
-
-    setLabelPlacementMode(activeSceneIndex);
-    setStatus(`Clique no mapa da cena ${activeSceneIndex + 1} para inserir o elemento manual.`);
-});
-labelClearButton.addEventListener('click', clearEditorialLabelsForActiveScene);
-annotationDeleteButton.addEventListener('click', () => {
-    const scene = getActiveScene();
-
-    scene.editorialLabels = scene.editorialLabels.filter(annotation => annotation.id !== selectedAnnotationId);
-    selectedAnnotationId = scene.editorialLabels[0]?.id || null;
-    updateSceneAnnotation(scene);
-    renderAnnotationPanel();
-    setStatus(`Item removido da cena ${scene.index + 1}.`);
-});
-selectedLabelTextInput.addEventListener('input', event => {
-    syncSelectedAnnotation(annotation => {
-        annotation.text = event.target.value;
-    });
-});
-selectedSymbolInput.addEventListener('change', event => {
-    syncSelectedAnnotation(annotation => {
-        annotation.symbol = event.target.value;
-        if (annotation.symbol === 'image' && editorialImageData) {
-            annotation.imageData = editorialImageData;
-            loadImage(editorialImageData);
-        }
-    });
-});
-selectedLabelPositionInput.addEventListener('change', event => {
-    syncSelectedAnnotation(annotation => {
-        annotation.textPosition = event.target.value;
-
-        if (annotation.textPosition !== 'custom') {
-            const offset = getDefaultLabelOffset(annotation.textPosition);
-            annotation.offsetX = offset.x;
-            annotation.offsetY = offset.y;
-        }
-    });
-});
-selectedLabelLatInput.addEventListener('change', event => {
-    syncSelectedAnnotation(annotation => {
-        const value = Number.parseFloat(String(event.target.value).replace(',', '.'));
-        if (isValidLatitude(value)) {
-            annotation.lat = value;
-        }
-    });
-});
-selectedLabelLngInput.addEventListener('change', event => {
-    syncSelectedAnnotation(annotation => {
-        const value = Number.parseFloat(String(event.target.value).replace(',', '.'));
-        if (isValidLongitude(value)) {
-            annotation.lng = value;
-        }
-    });
-});
-editorialImageInput.addEventListener('change', event => {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-        editorialImageData = '';
-        return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-        editorialImageData = String(reader.result || '');
-        loadImage(editorialImageData);
-        const selected = getSelectedAnnotation();
-
-        if (selected?.symbol === 'image') {
-            selected.imageData = editorialImageData;
-            updateSceneAnnotation(getActiveScene());
-            renderAnnotationPanel();
-        }
-
-        setStatus('PNG carregado para o símbolo manual.');
-    };
-    reader.onerror = () => setStatus('Não foi possível carregar a imagem.');
-    reader.readAsDataURL(file);
-});
-locatorModeInput.addEventListener('change', event => {
-    const scene = getActiveScene();
-    scene.locator.mode = event.target.value;
-    updateSceneLocator(scene);
-});
-locatorQueryInput.addEventListener('input', event => {
-    getActiveScene().locator.query = event.target.value;
-});
-locatorSearchButton.addEventListener('click', applyLocatorArea);
-locatorFocusButton.addEventListener('click', () => {
-    applyLocatorFocus(getActiveScene());
-    setStatus(`Foco do localizador atualizado na cena ${getActiveScene().index + 1}.`);
-});
-drawingStartButton.addEventListener('click', () => {
-    const scene = getActiveScene();
-    if (!scene) return;
-    if (drawingSceneIndex === scene.index) {
-        finalizeDrawing(scene);
-        return;
-    }
-    if (drawingSceneIndex !== null) {
-        const prev = scenes[drawingSceneIndex];
-        if (prev) { prev.activeDrawing = null; redrawDrawings(prev); }
-        setDrawingMode(null);
-    }
-    scene.activeDrawing = {
-        id: drawingIdCounter++,
-        points: [],
-        color: drawingColorInput.value,
-        width: Math.max(1, Math.min(100, Number(drawingWidthInput.value) || 3)),
-        dashed: drawingStyleInput.value === 'dashed',
-        arrow: drawingArrowInput.value
-    };
-    setDrawingMode(scene.index);
-    setStatus('Clique no mapa para adicionar pontos. Duplo clique ou "Fechar linha" para finalizar.');
-});
-
-drawingClearButton.addEventListener('click', () => {
-    drawings = [];
-    scenes.forEach(s => { s.activeDrawing = null; redrawDrawings(s); });
-    if (drawingSceneIndex !== null) setDrawingMode(null);
-    renderDrawingList();
-});
-
-sceneShapesInput.addEventListener('change', event => {
-    const scene = getActiveScene();
-    scene.showShapes = event.target.value === 'show';
-    redrawDrawings(scene);
-    setStatus(scene.showShapes ? `Formas exibidas na cena ${scene.index + 1}.` : `Formas ocultadas na cena ${scene.index + 1}.`);
-});
-shapeStartButton.addEventListener('click', () => {
-    const scene = getActiveScene();
-    if (!scene) return;
-    if (shapeMode === scene.index) {
-        setShapeMode(null);
-        setStatus('Inserção de forma cancelada.');
-        return;
-    }
-    setShapeMode(scene.index);
-    setStatus('Clique no mapa para definir o centro da forma.');
-});
-shapeClearButton.addEventListener('click', () => {
-    shapes = [];
-    scenes.forEach(s => { s.previewShape = null; redrawDrawings(s); });
-    if (shapeMode !== null) setShapeMode(null);
-    renderShapeList();
-});
-downloadButton.addEventListener('click', exportJpg);
-
-searchInput.addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-        event.preventDefault();
-        searchPlace();
-    }
-});
-
-setPreviewText();
-refreshSceneVisibility();
-setActiveScene(0);
+initializeApp();
