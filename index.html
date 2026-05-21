@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de mapas Mapbox</title>
+    <link rel="icon" href="data:,">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.css" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="workspace" aria-label="Editor de mapa">
+
+            <!-- PAINEL ESQUERDO: fluxo editorial -->
+            <aside class="controls-panel">
+
+                <div class="ctrl-header">
+                    <h1>Gerador de mapas</h1>
+                    <p id="status">Mapa pronto para edição.</p>
+                </div>
+
+                <form id="editor-form">
+
+                    <!-- 1. Buscar local -->
+                    <details class="tool-section" open>
+                        <summary class="tool-section__header">1 — Buscar local</summary>
+                        <div class="tool-section__body">
+                            <label class="field field-search">
+                                <span class="sr-only">Buscar local</span>
+                                <div class="inline-action">
+                                    <input id="search-input" type="search" autocomplete="off" placeholder="Cidade, país, endereço, lat/lng…" />
+                                    <button id="search-button" class="icon-button" type="button" title="Buscar" aria-label="Buscar">
+                                        <span aria-hidden="true">⌕</span>
+                                    </button>
+                                </div>
+                            </label>
+                            <div id="search-results" class="search-results" aria-live="polite"></div>
+                        </div>
+                    </details>
+
+                    <!-- 2. Texto do infográfico -->
+                    <details class="tool-section" open>
+                        <summary class="tool-section__header">2 — Título e texto</summary>
+                        <div class="tool-section__body">
+                            <label class="field">
+                                <span>Título</span>
+                                <textarea id="title-input" rows="2" maxlength="180">Título do mapa</textarea>
+                            </label>
+                            <label class="field">
+                                <span>Linha fina</span>
+                                <textarea id="deck-input" rows="2" maxlength="220">Linha fina com o contexto principal da notícia.</textarea>
+                            </label>
+                            <label class="field">
+                                <span>Fonte</span>
+                                <input id="source-input" type="text" maxlength="160" value="Fonte: Mapbox" />
+                            </label>
+                        </div>
+                    </details>
+
+                    <!-- 3. Cenas -->
+                    <details class="tool-section" open>
+                        <summary class="tool-section__header">3 — Cenas do mapa</summary>
+                        <div class="tool-section__body">
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Nº de cenas</span>
+                                    <select id="scene-count-input">
+                                        <option value="1">1 mapa</option>
+                                        <option value="2" selected>2 mapas</option>
+                                        <option value="3">3 mapas</option>
+                                    </select>
+                                </label>
+                                <label class="field">
+                                    <span>Editando</span>
+                                    <select id="active-scene-input">
+                                        <option value="0">Cena 1</option>
+                                        <option value="1">Cena 2</option>
+                                        <option value="2">Cena 3</option>
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- Localizador — fechado por padrão, recurso avançado -->
+                    <details class="tool-section">
+                        <summary class="tool-section__header">Localizador</summary>
+                        <div class="tool-section__body">
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Mini-mapas</span>
+                                    <select id="locator-mode-input">
+                                        <option value="none">Sem localizador</option>
+                                        <option value="one">1 mini-mapa</option>
+                                        <option value="two">2 mini-mapas</option>
+                                        <option value="three" selected>3 mini-mapas</option>
+                                    </select>
+                                </label>
+                                <label class="field">
+                                    <span>Área ampla</span>
+                                    <input id="locator-query-input" type="text" maxlength="80" value="Brasil" placeholder="Brasil, Europa, mundo…" />
+                                </label>
+                            </div>
+                            <div class="zoom-group">
+                                <button id="locator-search-button" class="secondary-button" type="button">Aplicar área</button>
+                                <button id="locator-focus-button" class="secondary-button" type="button">Usar destaque</button>
+                            </div>
+                        </div>
+                    </details>
+
+                    <!-- 4. Exportar -->
+                    <details class="tool-section" open>
+                        <summary class="tool-section__header">4 — Exportar</summary>
+                        <div class="tool-section__body">
+                            <label class="field field-range">
+                                <span class="range-heading">
+                                    <span>Altura da cena ativa</span>
+                                    <strong id="map-height-value">520px</strong>
+                                </span>
+                                <input id="map-height-input" type="range" min="180" max="1000" step="20" value="520" />
+                            </label>
+                            <div class="height-presets" aria-label="Alturas rápidas">
+                                <button class="height-preset-button" type="button" data-height="220">Faixa</button>
+                                <button class="height-preset-button" type="button" data-height="420">Médio</button>
+                                <button class="height-preset-button" type="button" data-height="650">Grande</button>
+                                <button class="height-preset-button" type="button" data-height="900">Gigante</button>
+                            </div>
+                            <button id="download-button" class="primary-button" type="button">Baixar JPG</button>
+                        </div>
+                    </details>
+
+                </form>
+            </aside>
+
+            <!-- CENTRO: preview -->
+            <section class="preview-panel" aria-label="Preview do infográfico">
+                <div id="export-frame" class="export-frame">
+                    <header class="text-stack">
+                        <h2 id="preview-title">Título do mapa</h2>
+                        <p id="preview-deck">Linha fina com o contexto principal da notícia.</p>
+                    </header>
+                    <div id="maps-stack" class="maps-stack" aria-label="Sequência de mapas"></div>
+                    <p id="preview-source" class="source-line">Fonte: Mapbox</p>
+                </div>
+            </section>
+
+            <!-- PAINEL DIREITO: ferramentas em accordion -->
+            <aside class="tools-panel" aria-label="Ferramentas">
+
+                <details class="tool-section" open>
+                    <summary class="tool-section__header">Mapa</summary>
+                    <div class="tool-section__body">
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Latitude</span>
+                                <input id="latitude-input" type="number" step="any" placeholder="-23.5505" />
+                            </label>
+                            <label class="field">
+                                <span>Longitude</span>
+                                <input id="longitude-input" type="number" step="any" placeholder="-46.6333" />
+                            </label>
+                        </div>
+                        <button id="coordinate-button" class="secondary-button" type="button">Ir para coordenadas</button>
+                        <div class="zoom-group" aria-label="Zoom do mapa">
+                            <button id="zoom-out-button" class="secondary-button zoom-button" type="button" aria-label="Diminuir zoom">−</button>
+                            <button id="zoom-in-button" class="secondary-button zoom-button" type="button" aria-label="Aumentar zoom">+</button>
+                        </div>
+                        <label class="field">
+                            <span>Nomes do Mapbox</span>
+                            <select id="map-labels-input">
+                                <option value="show" selected>Mostrar nomes gerais</option>
+                                <option value="hide">Ocultar nomes gerais</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>Linhas desenhadas</span>
+                            <select id="scene-drawings-input">
+                                <option value="show" selected>Exibir neste mapa</option>
+                                <option value="hide">Ocultar neste mapa</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>Formas</span>
+                            <select id="scene-shapes-input">
+                                <option value="show" selected>Exibir neste mapa</option>
+                                <option value="hide">Ocultar neste mapa</option>
+                            </select>
+                        </label>
+                    </div>
+                </details>
+
+                <details class="tool-section">
+                    <summary class="tool-section__header">Destaque</summary>
+                    <div class="tool-section__body">
+                        <label class="field">
+                            <span>Ponto da cena</span>
+                            <select id="marker-source-input">
+                                <option value="search">Usar local da busca</option>
+                                <option value="custom">Escolher ponto manual nesta cena</option>
+                            </select>
+                        </label>
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Estilo</span>
+                                <select id="marker-style-input">
+                                    <option value="halo" selected>Marcador + halo</option>
+                                    <option value="pin">Ponto simples</option>
+                                    <option value="loupe">Lupa</option>
+                                    <option value="box">Retângulo de zoom</option>
+                                    <option value="none">Sem destaque</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>Texto</span>
+                                <textarea id="marker-label-input" rows="2" maxlength="140">Local do fato</textarea>
+                            </label>
+                        </div>
+                        <div class="zoom-group">
+                            <button id="marker-center-button" class="secondary-button" type="button">Marcar centro</button>
+                            <button id="marker-clear-button" class="secondary-button" type="button">Limpar destaque</button>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="tool-section">
+                    <summary class="tool-section__header">Anotações</summary>
+                    <div class="tool-section__body">
+                        <label class="field">
+                            <span>Texto</span>
+                            <input id="editorial-label-input" type="text" maxlength="90" placeholder="Ex.: Rua Monte Carmelo" />
+                        </label>
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Símbolo</span>
+                                <select id="editorial-symbol-input">
+                                    <option value="dot" selected>Ponto</option>
+                                    <option value="square">Quadrado</option>
+                                    <option value="triangle">Triângulo</option>
+                                    <option value="image">PNG</option>
+                                    <option value="none">Sem símbolo</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>Texto inicial</span>
+                                <select id="editorial-label-position-input">
+                                    <option value="right" selected>À direita</option>
+                                    <option value="left">À esquerda</option>
+                                    <option value="top">Acima</option>
+                                    <option value="bottom">Abaixo</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label class="field">
+                            <span>PNG do símbolo</span>
+                            <input id="editorial-image-input" type="file" accept="image/png,image/jpeg,image/webp" />
+                        </label>
+                        <button id="label-add-button" class="primary-button" type="button">Inserir no clique</button>
+
+                        <div class="layers-section">
+                            <div class="section-heading">
+                                <h3>Itens da cena</h3>
+                                <button id="label-clear-button" class="text-button" type="button">Limpar</button>
+                            </div>
+                            <div id="annotation-list" class="annotation-list" aria-live="polite"></div>
+                        </div>
+
+                        <section id="annotation-editor" class="annotation-editor" hidden>
+                            <div class="section-heading">
+                                <h3>Editar item</h3>
+                                <button id="annotation-delete-button" class="text-button danger" type="button">Apagar</button>
+                            </div>
+                            <label class="field">
+                                <span>Texto do item</span>
+                                <input id="selected-label-text-input" type="text" maxlength="90" />
+                            </label>
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Símbolo</span>
+                                    <select id="selected-symbol-input">
+                                        <option value="dot">Ponto</option>
+                                        <option value="square">Quadrado</option>
+                                        <option value="triangle">Triângulo</option>
+                                        <option value="image">PNG</option>
+                                        <option value="none">Sem símbolo</option>
+                                    </select>
+                                </label>
+                                <label class="field">
+                                    <span>Texto</span>
+                                    <select id="selected-label-position-input">
+                                        <option value="right">À direita</option>
+                                        <option value="left">À esquerda</option>
+                                        <option value="top">Acima</option>
+                                        <option value="bottom">Abaixo</option>
+                                        <option value="custom">Manual</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Latitude</span>
+                                    <input id="selected-label-lat-input" type="number" step="any" />
+                                </label>
+                                <label class="field">
+                                    <span>Longitude</span>
+                                    <input id="selected-label-lng-input" type="number" step="any" />
+                                </label>
+                            </div>
+                        </section>
+                    </div>
+                </details>
+
+                <details class="tool-section">
+                    <summary class="tool-section__header">Linhas</summary>
+                    <div class="tool-section__body">
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Cor</span>
+                                <input id="drawing-color-input" type="color" value="#c81712" />
+                            </label>
+                            <label class="field">
+                                <span>Espessura (px)</span>
+                                <input id="drawing-width-input" type="number" min="1" max="100" value="3" />
+                            </label>
+                        </div>
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Estilo</span>
+                                <select id="drawing-style-input">
+                                    <option value="solid">Sólida</option>
+                                    <option value="dashed">Tracejada</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>Seta</span>
+                                <select id="drawing-arrow-input">
+                                    <option value="none">Sem seta</option>
+                                    <option value="end">No final</option>
+                                    <option value="both">Nas duas</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="zoom-group">
+                            <button id="drawing-start-button" class="primary-button" type="button">Começar linha</button>
+                            <button id="drawing-clear-button" class="secondary-button" type="button">Limpar tudo</button>
+                        </div>
+                        <div id="drawing-list" class="annotation-list" aria-live="polite"></div>
+                    </div>
+                </details>
+
+                <details class="tool-section">
+                    <summary class="tool-section__header">Formas</summary>
+                    <div class="tool-section__body">
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Tipo</span>
+                                <select id="shape-type-input">
+                                    <option value="circle">Círculo</option>
+                                    <option value="square">Quadrado</option>
+                                    <option value="hexagon">Hexágono</option>
+                                    <option value="triangle">Triângulo</option>
+                                </select>
+                            </label>
+                            <label class="field">
+                                <span>Esp. contorno</span>
+                                <input id="shape-stroke-width-input" type="number" min="0" max="30" value="2" />
+                            </label>
+                        </div>
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Cor do contorno</span>
+                                <input id="shape-stroke-color-input" type="color" value="#c81712" />
+                            </label>
+                            <label class="field">
+                                <span>Opacidade %</span>
+                                <input id="shape-stroke-opacity-input" type="number" min="0" max="100" value="100" />
+                            </label>
+                        </div>
+                        <div class="coordinate-grid">
+                            <label class="field">
+                                <span>Cor preenchimento</span>
+                                <input id="shape-fill-color-input" type="color" value="#c81712" />
+                            </label>
+                            <label class="field">
+                                <span>Opacidade %</span>
+                                <input id="shape-fill-opacity-input" type="number" min="0" max="100" value="30" />
+                            </label>
+                        </div>
+                        <label class="field">
+                            <span>Texto (opcional)</span>
+                            <input id="shape-text-input" type="text" maxlength="60" placeholder="Ex.: Zona de tremor" />
+                        </label>
+                        <div class="zoom-group">
+                            <button id="shape-start-button" class="primary-button" type="button">Inserir forma</button>
+                            <button id="shape-clear-button" class="secondary-button" type="button">Limpar tudo</button>
+                        </div>
+                        <div id="shape-list" class="annotation-list" aria-live="polite"></div>
+                    </div>
+                </details>
+
+            </aside>
+        </section>
+    </main>
+
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.js"></script>
+    <script src="./app.js" defer></script>
+</body>
+</html>
