@@ -72,6 +72,7 @@ const mapHeightInput = document.getElementById('map-height-input');
 const mapHeightValue = document.getElementById('map-height-value');
 const heightPresetButtons = Array.from(document.querySelectorAll('.height-preset-button'));
 const downloadButton = document.getElementById('download-button');
+const smartLabelsButton = document.getElementById('smart-labels-button');
 const statusEl = document.getElementById('status');
 const previewTitle = document.getElementById('preview-title');
 const previewDeck = document.getElementById('preview-deck');
@@ -80,6 +81,7 @@ const exportFrame = document.getElementById('export-frame');
 const mapsStack = document.getElementById('maps-stack');
 
 const scenes = [];
+let scenesInitialized = false;
 let activeSceneIndex = 0;
 let storyLocation = {lng: -47.8825, lat: -15.7942};
 let labelPlacementSceneIndex = null;
@@ -106,6 +108,10 @@ async function resolveMapboxToken() {
 
     try {
         const response = await fetch('/api/mapbox-token');
+        if (response.status === 401) {
+            window.location.replace('/login.html');
+            return '';
+        }
         if (!response.ok) {
             return '';
         }
@@ -435,6 +441,7 @@ function refreshSceneVisibility() {
 
     scenes.forEach(scene => {
         const isVisible = visibleScenes.includes(scene);
+        const justShown = isVisible && !scene._wasVisible;
         scene.sceneEl.hidden = !isVisible;
         scene.sceneEl.classList.toggle('is-active', scene.index === activeSceneIndex && isVisible);
 
@@ -445,8 +452,15 @@ function refreshSceneVisibility() {
                 updateSceneAnnotation(scene);
                 updateSceneLocator(scene);
                 applyMapLabelVisibility(scene);
+                // Cena recém-exibida (ex.: ao aumentar o nº de cenas) que segue a
+                // busca: posiciona no ponto efetivo agora que já tem tamanho.
+                if (scenesInitialized && justShown && scene.index > 0 && scene.markerSource === 'search') {
+                    focusSceneMap(scene);
+                }
             });
         }
+
+        scene._wasVisible = isVisible;
     });
 
     if (!visibleScenes.includes(getActiveScene())) {
@@ -549,11 +563,63 @@ function goToCoordinates(lat, lng, zoom = Math.max(getActiveScene().map.getZoom(
 }
 
 function getSceneMarker(scene) {
-    if (scene.index === 0 || scene.markerSource === 'search') {
+    if (scene.index === 0) {
         return storyLocation;
     }
 
-    return scene.marker || storyLocation;
+    // Ponto manual desta cena tem prioridade.
+    if (scene.markerSource === 'custom' && scene.marker) {
+        return scene.marker;
+    }
+
+    // Caso contrário, herda o ponto mais recente definido nas cenas anteriores
+    // (ex.: cena 3 segue o ponto manual da cena 2; se não houver, o da busca).
+    for (let i = scene.index - 1; i >= 1; i -= 1) {
+        const previous = scenes[i];
+        if (previous && previous.markerSource === 'custom' && previous.marker) {
+            return previous.marker;
+        }
+    }
+
+    return storyLocation;
+}
+
+// Zoom progressivo do mapa principal: cada cena fecha mais que a anterior.
+function sceneDetailZoom(index) {
+    const levels = [null, 12, 14.5];
+    return levels[index] ?? (12 + (index - 1) * 2.5);
+}
+
+// Reposiciona o mapa principal de uma cena no seu ponto efetivo, com o zoom
+// progressivo. Para a cena 2, se houver bbox da busca, emoldura o local.
+// Robusto: valida coordenadas, espera o estilo carregar e nunca lança erro
+// (um erro aqui antes abortava a busca e travava as cenas seguintes).
+function focusSceneMap(scene, feature) {
+    if (!scene || scene.index === 0) return;
+
+    const apply = () => {
+        // Nunca operar em mapa escondido/0px: gera projeção NaN e quebra o render.
+        const container = scene.map.getContainer();
+        if (!container || !container.offsetWidth || !container.offsetHeight) return;
+        const focus = getSceneMarker(scene);
+        if (!focus || !isValidLatitude(focus.lat) || !isValidLongitude(focus.lng)) return;
+        const visible = !scene.sceneEl.hidden;
+        try {
+            // Sempre flyTo com centro + zoom explícitos (fitBounds com padding
+            // nesse estilo gerava transform NaN e travava o mapa).
+            const options = {center: [focus.lng, focus.lat], zoom: sceneDetailZoom(scene.index), essential: true};
+            if (!visible) options.duration = 0;
+            scene.map.flyTo(options);
+        } catch (err) {
+            // estado transitório do mapa; ignora
+        }
+    };
+
+    if (scene.loaded && scene.map.isStyleLoaded()) {
+        apply();
+    } else {
+        scene.map.once('idle', apply);
+    }
 }
 
 function canSetCustomMarker(scene) {
@@ -594,6 +660,8 @@ function setCustomMarkerForActiveScene(lngLat) {
     scene.markerLabel = markerLabelInput.value;
     updateSceneAnnotation(scene);
     updateSceneLocator(scene);
+    // Cenas seguintes herdam este novo ponto (com zoom progressivo).
+    scenes.filter(s => s.index > scene.index).forEach(s => focusSceneMap(s));
     setStatus(`Destaque aplicado na cena ${scene.index + 1}.`);
 }
 
@@ -610,6 +678,8 @@ function clearMarkerForActiveScene() {
     scene.marker = null;
     updateSceneAnnotation(scene);
     updateSceneLocator(scene);
+    // Cenas seguintes voltam a herdar o ponto anterior da cadeia.
+    scenes.filter(s => s.index > scene.index).forEach(s => focusSceneMap(s));
     setStatus(`Ponto manual removido da cena ${scene.index + 1}.`);
 }
 
@@ -625,14 +695,17 @@ async function searchPlace() {
 
     const coordinates = parseCoordinatePair(query);
     if (coordinates) {
-        getVisibleScenes().forEach(scene => {
-            scene.map.flyTo({
-                center: [coordinates.lng, coordinates.lat],
-                zoom: scene.index === 0 ? scene.map.getZoom() : 12,
-                essential: true
-            });
-        });
         setStoryLocation({lng: coordinates.lng, lat: coordinates.lat});
+        scenes.forEach(scene => {
+            if (scene.index === 0) {
+                scene.map.flyTo({center: [coordinates.lng, coordinates.lat], zoom: scene.map.getZoom(), essential: true});
+            } else {
+                // Busca é o controle universal: religa a cena ao ponto da busca.
+                scene.markerSource = 'search';
+                focusSceneMap(scene);
+            }
+        });
+        syncControlsFromScene();
         setStatus('Local da busca atualizado pelas coordenadas.');
         return;
     }
@@ -683,29 +756,27 @@ function renderSearchResults(features) {
             searchInput.value = feature.place_name || feature.text || '';
             searchResults.replaceChildren();
 
-            getVisibleScenes().forEach(scene => {
+            if (isValidLatitude(lat) && isValidLongitude(lng)) {
+                setStoryLocation({lng, lat});
+            }
+
+            scenes.forEach(scene => {
                 if (scene.index === 0) {
                     if (isValidLatitude(lat) && isValidLongitude(lng)) {
                         scene.map.flyTo({center: [lng, lat], essential: true});
                     }
-                } else if (Array.isArray(feature.bbox) && feature.bbox.length === 4) {
-                    scene.map.fitBounds(
-                        [
-                            [feature.bbox[0], feature.bbox[1]],
-                            [feature.bbox[2], feature.bbox[3]]
-                        ],
-                        {padding: 54, maxZoom: 13, essential: true}
-                    );
-                } else if (isValidLatitude(lat) && isValidLongitude(lng)) {
-                    scene.map.flyTo({center: [lng, lat], zoom: 12, essential: true});
+                } else {
+                    // Busca é o controle universal: religa a cena ao ponto da busca.
+                    scene.markerSource = 'search';
+                    focusSceneMap(scene, feature);
                 }
             });
 
             if (isValidLatitude(lat) && isValidLongitude(lng)) {
-                setStoryLocation({lng, lat});
                 getVisibleScenes().forEach(scene => applyLocatorLevels(scene, feature));
             }
 
+            syncControlsFromScene();
             setStatus('Local da busca aplicado em todas as cenas.');
         });
 
@@ -724,9 +795,18 @@ function goToCoordinateFields() {
         return;
     }
 
-    goToCoordinates(lat, lng);
     setStoryLocation({lng, lat});
-    setStatus('Local da busca atualizado pelas coordenadas.');
+    scenes.forEach(scene => {
+        if (scene.index === 0) {
+            scene.map.flyTo({center: [lng, lat], zoom: scene.map.getZoom(), essential: true});
+        } else {
+            // Coordenadas = controle universal: todas as cenas seguem o ponto.
+            scene.markerSource = 'search';
+            focusSceneMap(scene);
+        }
+    });
+    syncControlsFromScene();
+    setStatus('Local atualizado pelas coordenadas em todas as cenas.');
 }
 
 function changeZoom(delta) {
@@ -737,8 +817,18 @@ function changeZoom(delta) {
     });
 }
 
+function styleReady(scene) {
+    try {
+        return scene && scene.loaded && scene.map && scene.map.isStyleLoaded();
+    } catch {
+        return false;
+    }
+}
+
 function captureTextLayerVisibility(scene) {
-    const style = scene.map.getStyle();
+    if (!styleReady(scene)) return;
+    let style;
+    try { style = scene.map.getStyle(); } catch { return; }
 
     if (!style?.layers?.length) {
         return;
@@ -758,7 +848,9 @@ function captureTextLayerVisibility(scene) {
 }
 
 function applySymbolEdgeAvoidance(scene) {
-    const style = scene.map.getStyle();
+    if (!styleReady(scene)) return;
+    let style;
+    try { style = scene.map.getStyle(); } catch { return; }
     if (!style?.layers) return;
     style.layers.forEach(layer => {
         if (layer.type !== 'symbol') return;
@@ -1220,7 +1312,11 @@ function drawDrawings(ctx, scene, offsetY) {
 }
 
 function hideLocatorLabels(map) {
-    const style = map.getStyle();
+    let style;
+    try {
+        if (!map || !map.isStyleLoaded()) return;
+        style = map.getStyle();
+    } catch { return; }
     if (!style?.layers) return;
     style.layers.forEach(layer => {
         if (layer.type === 'symbol' && layer.layout?.['text-field']) {
@@ -1230,7 +1326,10 @@ function hideLocatorLabels(map) {
 }
 
 function applyMapLabelVisibility(scene) {
-    if (!scene.map.getStyle()?.layers?.length) {
+    if (!styleReady(scene)) return;
+    let style;
+    try { style = scene.map.getStyle(); } catch { return; }
+    if (!style?.layers?.length) {
         return;
     }
 
@@ -2067,21 +2166,21 @@ function drawLocator(ctx, scene, offsetY) {
     ctx.restore();
 }
 
-async function exportJpg() {
-    setStatus('Preparando JPG...');
-    downloadButton.disabled = true;
+async function prepareForRender() {
+    await document.fonts.ready;
+    const visibleScenes = getVisibleScenes();
+    await Promise.all(visibleScenes.map(waitForMapIdle));
+    await Promise.all(
+        visibleScenes
+            .flatMap(scene => scene.editorialLabels)
+            .filter(editorialLabel => editorialLabel.symbol === 'image' && editorialLabel.imageData)
+            .map(editorialLabel => loadImage(editorialLabel.imageData))
+    );
+    return visibleScenes;
+}
 
-    try {
-        await document.fonts.ready;
-        const visibleScenes = getVisibleScenes();
-        await Promise.all(visibleScenes.map(waitForMapIdle));
-        await Promise.all(
-            visibleScenes
-                .flatMap(scene => scene.editorialLabels)
-                .filter(editorialLabel => editorialLabel.symbol === 'image' && editorialLabel.imageData)
-                .map(editorialLabel => loadImage(editorialLabel.imageData))
-        );
-
+// Constroi o canvas final da peca (mesma logica do export) e o retorna.
+function renderPieceCanvas(visibleScenes) {
         const measuringCanvas = document.createElement('canvas');
         const measuringCtx = measuringCanvas.getContext('2d');
         const textWidth = outputWidth - (textPaddingX * 2);
@@ -2151,6 +2250,7 @@ async function exportJpg() {
             drawShapes(ctx, scene, y);
             drawDrawings(ctx, scene, y);
             drawEditorialLabels(ctx, scene, y);
+            drawSmartLabels(ctx, scene, y);
             drawLocator(ctx, scene, y);
             y += scene.height;
         });
@@ -2162,11 +2262,19 @@ async function exportJpg() {
             drawTextBlock(ctx, sourceBlock, textPaddingX, y);
         }
 
+        return canvas;
+}
+
+async function exportJpg() {
+    setStatus('Preparando JPG...');
+    downloadButton.disabled = true;
+    try {
+        const visibleScenes = await prepareForRender();
+        const canvas = renderPieceCanvas(visibleScenes);
         const link = document.createElement('a');
         link.download = `${getFileSlug()}-650px.jpg`;
         link.href = canvas.toDataURL('image/jpeg', 0.95);
         link.click();
-
         setStatus(`JPG exportado com ${visibleScenes.length} cena(s) e 650px de largura.`);
     } catch (error) {
         setStatus(error.message || 'Não foi possível exportar o JPG.');
@@ -2175,12 +2283,607 @@ async function exportJpg() {
     }
 }
 
+// Gera um thumbnail JPG (dataURL) reduzido, reutilizando o render da peca.
+async function generatePieceThumbnail(maxWidth = 320) {
+    const visibleScenes = await prepareForRender();
+    const full = renderPieceCanvas(visibleScenes);
+    const scale = Math.min(1, maxWidth / full.width);
+    const tc = document.createElement('canvas');
+    tc.width = Math.round(full.width * scale);
+    tc.height = Math.round(full.height * scale);
+    tc.getContext('2d').drawImage(full, 0, 0, tc.width, tc.height);
+    return tc.toDataURL('image/jpeg', 0.8);
+}
+
+// ============================================================
+// Rótulos inteligentes (beta) — isolado, opera na cena ativa.
+// Busca lugares ao redor (geocoding reverso), classifica e desenha
+// os rótulos com controle de borda + anti-colisão (não corta, não sobrepõe).
+// ============================================================
+const SMART = {
+    font: '"Roboto Condensed", "Arial Narrow", "Open Sans", Arial, sans-serif',
+    remPx: 16,
+    dotRadius: 4,
+    offset: 7,
+    edgeMargin: 8,
+    strokeWidth: 3.5,
+    minSpacing: 56,
+    sampleToken: () => mapboxToken
+};
+
+function smartFontSize(style) {
+    return Math.round((style.sizeRem || 0.75) * SMART.remPx);
+}
+function smartLineHeight(style) {
+    return Math.round(smartFontSize(style) * 1.15);
+}
+
+const SMART_LOWER = new Set(['de', 'do', 'da', 'dos', 'das', 'e', 'em', 'no', 'na', 'nos', 'nas', 'com', 'por', 'para', 'ao', 'aos', 'à', 'às', 'd']);
+function smartTitleCase(text) {
+    return String(text || '').split(/\s+/).map((word, i) => {
+        const lower = word.toLowerCase();
+        if (i > 0 && SMART_LOWER.has(lower)) return lower;
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    }).join(' ');
+}
+function smartApplyCase(text, mode) {
+    if (mode === 'upper') return String(text).toUpperCase();
+    if (mode === 'title') return smartTitleCase(text);
+    return String(text);
+}
+
+let _smartMeasureCtx = null;
+function smartMeasureCtx() {
+    if (!_smartMeasureCtx) _smartMeasureCtx = document.createElement('canvas').getContext('2d');
+    return _smartMeasureCtx;
+}
+
+function smartNormalize(value) {
+    return String(value || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+}
+
+function smartEscape(value) {
+    return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Tabela tipográfica (condensed em todos):
+//  países/estados: #232323 bold UPPER 0.9rem
+//  capitais:       #232323 bold Title 0.8rem (com ponto)
+//  cidades:        #232323 regular Title 0.75rem (com ponto)
+//  destaque:       #c4170c bold Title 1rem (com ponto)
+function smartLabelStyle(tipo) {
+    switch (tipo) {
+        case 'estado':   return {color: '#232323', weight: 700, case: 'upper', sizeRem: 0.9, dot: false};
+        case 'capital':  return {color: '#232323', weight: 700, case: 'title', sizeRem: 0.8, dot: true};
+        case 'cidade':   return {color: '#232323', weight: 400, case: 'title', sizeRem: 0.75, dot: true};
+        case 'acidente': return {color: '#c4170c', weight: 700, case: 'title', sizeRem: 1.0, dot: true};
+        case 'agua':     return {color: '#1975b8', weight: 400, case: 'title', sizeRem: 0.72, dot: false, italic: true};
+        case 'floresta': return {color: '#656b37', weight: 400, case: 'title', sizeRem: 0.72, dot: false};
+        default:         return {color: '#5f6466', weight: 400, case: 'title', sizeRem: 0.72, dot: false}; // via/bairro
+    }
+}
+
+function classifySmartFeature(feat) {
+    const types = feat.place_type || [];
+    const name = feat.text || '';
+    if (!name || /^\d+$/.test(name)) return null;
+    if (types.includes('country') || types.includes('region')) return 'estado';
+    if (types.includes('place')) return 'cidade';
+    const category = smartNormalize(feat.properties && feat.properties.category || '');
+    const full = smartNormalize(`${name} ${feat.place_name || ''} ${category}`);
+    if (/\b(rio|lago|lagoa|represa|baia|oceano|mar|praia|canal|igarape)\b/.test(full)) return 'agua';
+    if (/\b(floresta|parque|mata|reserva|bosque)\b/.test(full)) return 'floresta';
+    if (types.includes('locality') || types.includes('neighborhood')) return 'vizinho';
+    if (/\b(rodovia|estrada|avenida|rua|via|highway|br-|sp-|rj-|mg-)\b/.test(full)) return 'vizinho';
+    if (types.includes('address') || types.includes('poi')) return 'vizinho';
+    return null;
+}
+
+// Tipos de feature a pedir ao geocoder, conforme o zoom (evita rua no continente).
+function smartGeocodeTypes(zoom) {
+    if (zoom < 4) return 'country';
+    if (zoom < 6) return 'country,region';
+    if (zoom < 8.5) return 'region,place';
+    if (zoom < 11.5) return 'place,locality';
+    return 'place,locality,neighborhood,poi,address';
+}
+
+// Categorias (já classificadas) permitidas em cada faixa de zoom.
+function smartAllowedCategories(zoom) {
+    if (zoom < 6) return new Set(['estado']);            // só países/estados
+    if (zoom < 8.5) return new Set(['estado', 'cidade', 'agua']);
+    if (zoom < 11.5) return new Set(['cidade', 'capital', 'vizinho', 'agua']);
+    return new Set(['cidade', 'capital', 'vizinho', 'agua', 'floresta']);
+}
+
+let _smartIdSeq = 1;
+
+async function fetchSmartNearby(scene) {
+    const bounds = scene.map.getBounds();
+    if (!bounds) return [];
+    const zoom = scene.map.getZoom();
+    const allowed = smartAllowedCategories(zoom);
+    const geocodeTypes = smartGeocodeTypes(zoom);
+    const west = bounds.getWest();
+    const east = bounds.getEast();
+    const north = bounds.getNorth();
+    const south = bounds.getSouth();
+
+    // Grade de amostragem mais densa no zoom baixo (mais países/estados).
+    const cols = zoom < 6 ? 7 : zoom < 9 ? 5 : 4;
+    const rows = zoom < 6 ? 6 : zoom < 9 ? 4 : 3;
+    const samples = [];
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const xx = (c + 0.5) / cols;
+            const yy = (r + 0.5) / rows;
+            if (Math.abs(xx - 0.5) < 0.12 && Math.abs(yy - 0.5) < 0.12) continue; // pula o centro (marcador)
+            samples.push([west + (east - west) * xx, north + (south - north) * yy]);
+        }
+    }
+
+    const token = SMART.sampleToken();
+    const responses = await Promise.all(samples.map((sample) =>
+        fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${sample[0]},${sample[1]}.json?language=pt&types=${geocodeTypes}&access_token=${token}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => ({d, sample}))
+            .catch(() => null)
+    ));
+
+    const seen = new Set();
+    const out = [];
+    for (const res of responses) {
+        if (!res || !res.d || !Array.isArray(res.d.features)) continue;
+        for (const feat of res.d.features) {
+            const tipo = classifySmartFeature(feat);
+            if (!tipo || !allowed.has(tipo) || !Array.isArray(feat.center)) continue;
+            const key = smartNormalize(feat.text);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            // País/estado: posiciona no ponto amostrado (dentro da tela), não no centróide.
+            const usaAmostra = tipo === 'estado';
+            out.push({
+                id: _smartIdSeq++,
+                lng: usaAmostra ? res.sample[0] : feat.center[0],
+                lat: usaAmostra ? res.sample[1] : feat.center[1],
+                nome: feat.text,
+                tipo
+            });
+        }
+    }
+    return out;
+}
+
+function smartMeasure(lines, style) {
+    const ctx = smartMeasureCtx();
+    const fs = smartFontSize(style);
+    ctx.font = `${style.italic ? 'italic ' : ''}${style.weight} ${fs}px ${SMART.font}`;
+    return Math.max(...lines.map(l => ctx.measureText(l).width), 1) + SMART.strokeWidth * 2;
+}
+
+function smartIntersect(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function placeSmartLabel(point, markerHalf, lines, width, height, accepted, style) {
+    const fs = smartFontSize(style);
+    const lh = smartLineHeight(style);
+    const w = smartMeasure(lines, style);
+    const h = fs + (lines.length - 1) * lh;
+    const ascent = fs * 0.8;
+    const positions = ['acima', 'abaixo', 'direita', 'esquerda'];
+    for (const pos of positions) {
+        let x, y, anchor;
+        if (pos === 'acima') { x = point.x; y = point.y - markerHalf - SMART.offset - (h - ascent); anchor = 'middle'; }
+        else if (pos === 'abaixo') { x = point.x; y = point.y + markerHalf + SMART.offset + ascent; anchor = 'middle'; }
+        else if (pos === 'direita') { x = point.x + markerHalf + SMART.offset; y = point.y - h / 2 + ascent; anchor = 'start'; }
+        else { x = point.x - markerHalf - SMART.offset; y = point.y - h / 2 + ascent; anchor = 'end'; }
+
+        const left = anchor === 'middle' ? x - w / 2 : anchor === 'end' ? x - w : x;
+        const top = y - ascent;
+        const bounds = {left, top, right: left + w, bottom: top + h};
+
+        if (bounds.left < SMART.edgeMargin || bounds.right > width - SMART.edgeMargin ||
+            bounds.top < SMART.edgeMargin || bounds.bottom > height - SMART.edgeMargin) continue;
+        if (accepted.some(b => smartIntersect(b, bounds))) continue;
+        return {x, y, anchor, lines, bounds};
+    }
+    return null; // não coube sem cortar/sobrepor → descarta (comportamento desejado)
+}
+
+const SMART_ORDER = {estado: 0, agua: 1, capital: 2, acidente: 2, cidade: 3, floresta: 4, vizinho: 5};
+
+function computeSmartLayout(scene, width, height) {
+    if (!scene.smartLabelsOn || !Array.isArray(scene.smartLabels)) return [];
+    const accepted = [];
+    const placed = [];
+    const labels = [...scene.smartLabels].sort((a, b) => (SMART_ORDER[a.tipo] ?? 9) - (SMART_ORDER[b.tipo] ?? 9));
+    for (const label of labels) {
+        let point;
+        try { point = scene.map.project([label.lng, label.lat]); } catch { continue; }
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+        if (point.x < -60 || point.x > width + 60 || point.y < -60 || point.y > height + 60) continue;
+        const style = smartLabelStyle(label.tipo);
+        const text = smartApplyCase(label.nome, style.case);
+        const lines = [text];
+        const markerHalf = style.dot ? SMART.dotRadius : 0;
+        const fs = smartFontSize(style);
+
+        // Posição manual (usuário arrastou): respeita o offset, sem auto-colocar.
+        if (label.offset) {
+            const x = point.x + label.offset.dx;
+            const y = point.y + label.offset.dy;
+            const anchor = label.offset.anchor || 'middle';
+            const w = smartMeasure(lines, style);
+            const left = anchor === 'middle' ? x - w / 2 : anchor === 'end' ? x - w : x;
+            const bounds = {left, top: y - fs * 0.8, right: left + w, bottom: y - fs * 0.8 + fs};
+            accepted.push(bounds);
+            placed.push({label, point, pos: {x, y, anchor, lines, bounds}, style});
+            continue;
+        }
+
+        // espaçamento mínimo entre marcadores (só no automático)
+        if (placed.some(it => Math.hypot(it.point.x - point.x, it.point.y - point.y) < SMART.minSpacing)) continue;
+        const pos = placeSmartLabel(point, markerHalf, lines, width, height, accepted, style);
+        if (!pos) continue;
+        accepted.push(pos.bounds);
+        placed.push({label, point, pos, style});
+    }
+    return placed;
+}
+
+function ensureSmartLayer(scene) {
+    if (scene.smartEl) return scene.smartEl;
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'smart-label-layer');
+    svg.style.position = 'absolute';
+    svg.style.inset = '0';
+    svg.style.pointerEvents = 'none'; // só os textos capturam (definido por grupo)
+    svg.style.zIndex = '4';
+    scene.sceneEl.appendChild(svg);
+    scene.smartEl = svg;
+    attachSmartDrag(scene);
+    return svg;
+}
+
+function renderSmartLabels(scene) {
+    if (!scene.smartEl) return;
+    const svg = scene.smartEl;
+    const width = scene.mapEl.clientWidth || outputWidth;
+    const height = scene.mapEl.clientHeight || scene.height;
+    if (!scene.smartLabelsOn) { svg.innerHTML = ''; return; }
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('width', width);
+    svg.setAttribute('height', height);
+
+    let pins = '';
+    let texts = '';
+    for (const item of computeSmartLayout(scene, width, height)) {
+        const {label, point, pos, style} = item;
+        if (style.dot) {
+            pins += `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="${SMART.dotRadius}" fill="${style.color}" stroke="#ffffff" stroke-width="1.5"/>`;
+        }
+        // Texto num grupo arrastável (pin fica fixo no continente acima).
+        const fs = smartFontSize(style);
+        const lh = smartLineHeight(style);
+        texts += `<g class="smart-label-text" data-id="${label.id}" style="pointer-events:auto;cursor:move">`;
+        texts += `<text x="${pos.x.toFixed(1)}" y="${pos.y.toFixed(1)}" font-family="${SMART.font}" font-weight="${style.weight}" font-size="${fs}"${style.italic ? ' font-style="italic"' : ''} fill="${style.color}" text-anchor="${pos.anchor}" paint-order="stroke" stroke="#ffffff" stroke-width="${SMART.strokeWidth}" stroke-linejoin="round" stroke-linecap="round">`;
+        pos.lines.forEach((line, idx) => {
+            texts += `<tspan x="${pos.x.toFixed(1)}" dy="${idx === 0 ? 0 : lh}">${smartEscape(line)}</tspan>`;
+        });
+        texts += `</text></g>`;
+    }
+    svg.innerHTML = pins + texts;
+}
+
+// Arraste do texto (pin permanece fixo). Captura no svg (estável entre renders).
+function attachSmartDrag(scene) {
+    const svg = scene.smartEl;
+    let drag = null;
+
+    svg.addEventListener('pointerdown', (event) => {
+        const group = event.target.closest('g[data-id]');
+        if (!group) return;
+        const id = group.getAttribute('data-id');
+        const label = (scene.smartLabels || []).find(l => String(l.id) === id);
+        if (!label) return;
+
+        const width = scene.mapEl.clientWidth || outputWidth;
+        const height = scene.mapEl.clientHeight || scene.height;
+        const rect = svg.getBoundingClientRect();
+        const scale = rect.width ? rect.width / width : 1;
+        let point;
+        try { point = scene.map.project([label.lng, label.lat]); } catch { return; }
+
+        if (!label.offset) {
+            const layout = computeSmartLayout(scene, width, height);
+            const item = layout.find(it => it.label === label);
+            label.offset = item
+                ? {dx: item.pos.x - point.x, dy: item.pos.y - point.y, anchor: item.pos.anchor}
+                : {dx: 0, dy: -18, anchor: 'middle'};
+        }
+
+        drag = {
+            label, group, scale,
+            startX: event.clientX, startY: event.clientY,
+            baseDx: label.offset.dx, baseDy: label.offset.dy
+        };
+        svg.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        event.stopPropagation();
+    });
+
+    svg.addEventListener('pointermove', (event) => {
+        if (!drag) return;
+        const ndx = (event.clientX - drag.startX) / drag.scale;
+        const ndy = (event.clientY - drag.startY) / drag.scale;
+        drag.label.offset.dx = drag.baseDx + ndx;
+        drag.label.offset.dy = drag.baseDy + ndy;
+        // move só o grupo de texto (visual), sem re-render completo
+        drag.group.setAttribute('transform', `translate(${ndx.toFixed(1)}, ${ndy.toFixed(1)})`);
+    });
+
+    const finish = () => {
+        if (!drag) return;
+        drag = null;
+        renderSmartLabels(scene); // recoloca já com o offset definitivo
+    };
+    svg.addEventListener('pointerup', finish);
+    svg.addEventListener('pointercancel', finish);
+}
+
+// Desenho no canvas de export (mesmo layout do preview).
+function drawSmartLabels(ctx, scene, offsetY) {
+    if (!scene.smartLabelsOn) return;
+    const width = scene.mapEl.clientWidth || outputWidth;
+    const height = scene.mapEl.clientHeight || scene.height;
+    const layout = computeSmartLayout(scene, width, height);
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (const {point, pos, style} of layout) {
+        if (style.dot) {
+            ctx.beginPath();
+            ctx.arc(point.x, offsetY + point.y, SMART.dotRadius, 0, Math.PI * 2);
+            ctx.fillStyle = style.color;
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#ffffff';
+            ctx.stroke();
+        }
+        const fs = smartFontSize(style);
+        const lh = smartLineHeight(style);
+        ctx.font = `${style.italic ? 'italic ' : ''}${style.weight} ${fs}px ${SMART.font}`;
+        ctx.textAlign = pos.anchor === 'middle' ? 'center' : pos.anchor === 'end' ? 'right' : 'left';
+        ctx.textBaseline = 'alphabetic';
+        ctx.lineWidth = SMART.strokeWidth * 2;
+        ctx.strokeStyle = '#ffffff';
+        ctx.fillStyle = style.color;
+        pos.lines.forEach((line, idx) => {
+            const ly = offsetY + pos.y + (idx === 0 ? 0 : idx * lh);
+            ctx.strokeText(line, pos.x, ly);
+            ctx.fillText(line, pos.x, ly);
+        });
+    }
+    ctx.restore();
+}
+
+async function toggleSmartLabels() {
+    const scene = getActiveScene();
+    if (!scene) return;
+    ensureSmartLayer(scene);
+
+    if (scene.smartLabelsOn) {
+        scene.smartLabelsOn = false;
+        scene.smartLabels = [];
+        renderSmartLabels(scene);
+        setStatus(`Rótulos inteligentes desativados na cena ${scene.index + 1}.`);
+        if (smartLabelsButton) smartLabelsButton.textContent = 'Ativar na cena ativa';
+        return;
+    }
+
+    if (smartLabelsButton) { smartLabelsButton.disabled = true; smartLabelsButton.textContent = 'Buscando...'; }
+    setStatus('Buscando cidades, rios e vias ao redor...');
+    try {
+        const places = await fetchSmartNearby(scene);
+        scene.smartLabels = places;
+        scene.smartLabelsOn = true;
+        if (!scene._smartHooked) {
+            scene.map.on('move', () => renderSmartLabels(scene));
+            scene._smartHooked = true;
+        }
+        renderSmartLabels(scene);
+        setStatus(`${places.length} rótulo(s) na cena ${scene.index + 1}. Arraste o mapa que eles se reposicionam.`);
+        if (smartLabelsButton) smartLabelsButton.textContent = 'Desativar nesta cena';
+    } catch (err) {
+        setStatus('Não foi possível buscar os lugares.');
+        if (smartLabelsButton) smartLabelsButton.textContent = 'Ativar na cena ativa';
+    } finally {
+        if (smartLabelsButton) smartLabelsButton.disabled = false;
+    }
+}
+
+// ---- Serializacao do estado da peca (Fase 3) ----
+const STATE_VERSION = 1;
+
+function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+// Captura TODO o estado do editor em um objeto JSON serializavel.
+function serializeState() {
+    return {
+        version: STATE_VERSION,
+        meta: {
+            title: titleInput.value,
+            deck: deckInput.value,
+            source: sourceInput.value,
+            sceneCount: Number.parseInt(sceneCountInput.value, 10) || 1,
+            activeSceneIndex,
+            storyLocation: {...storyLocation},
+            editorialImageData,
+            counters: {drawingIdCounter, shapeIdCounter, annotationIdCounter}
+        },
+        drawings: clone(drawings),
+        shapes: clone(shapes.filter(s => !s._preview).map(({_preview, ...rest}) => rest)),
+        scenes: scenes.map(scene => {
+            const center = scene.map.getCenter();
+            return {
+                index: scene.index,
+                height: scene.height,
+                view: {
+                    lng: center.lng,
+                    lat: center.lat,
+                    zoom: scene.map.getZoom(),
+                    bearing: scene.map.getBearing(),
+                    pitch: scene.map.getPitch()
+                },
+                marker: scene.marker ? {...scene.marker} : null,
+                markerSource: scene.markerSource,
+                markerStyle: scene.markerStyle,
+                markerLabel: scene.markerLabel,
+                showMapLabels: scene.showMapLabels,
+                showDrawings: scene.showDrawings,
+                showShapes: scene.showShapes,
+                editorialLabels: clone(scene.editorialLabels),
+                locator: clone(scene.locator)
+            };
+        })
+    };
+}
+
+function whenSceneReady(scene) {
+    return new Promise(resolve => {
+        if (scene.loaded && scene.map.isStyleLoaded()) {
+            resolve();
+            return;
+        }
+        scene.map.once('idle', () => resolve());
+    });
+}
+
+// Reconstroi o editor a partir de um estado serializado.
+async function applyState(state) {
+    if (!state || !Array.isArray(state.scenes)) return;
+    const meta = state.meta || {};
+
+    titleInput.value = meta.title || '';
+    deckInput.value = meta.deck || '';
+    sourceInput.value = meta.source || '';
+    sceneCountInput.value = String(meta.sceneCount || state.scenes.length || 1);
+    if (meta.storyLocation) storyLocation = {...meta.storyLocation};
+    editorialImageData = meta.editorialImageData || '';
+    if (meta.counters) {
+        drawingIdCounter = meta.counters.drawingIdCounter || drawingIdCounter;
+        shapeIdCounter = meta.counters.shapeIdCounter || shapeIdCounter;
+        annotationIdCounter = meta.counters.annotationIdCounter || annotationIdCounter;
+    }
+
+    drawings = Array.isArray(state.drawings) ? clone(state.drawings) : [];
+    shapes = Array.isArray(state.shapes) ? clone(state.shapes) : [];
+
+    state.scenes.forEach(saved => {
+        const scene = scenes[saved.index];
+        if (!scene) return;
+        scene.height = saved.height ?? scene.height;
+        scene.sceneEl.style.height = `${scene.height}px`;
+        scene.marker = saved.marker ? {...saved.marker} : null;
+        scene.markerSource = saved.markerSource ?? scene.markerSource;
+        scene.markerStyle = saved.markerStyle ?? scene.markerStyle;
+        scene.markerLabel = saved.markerLabel ?? scene.markerLabel;
+        scene.showMapLabels = saved.showMapLabels !== false;
+        scene.showDrawings = saved.showDrawings !== false;
+        scene.showShapes = saved.showShapes !== false;
+        scene.editorialLabels = Array.isArray(saved.editorialLabels) ? clone(saved.editorialLabels) : [];
+        if (saved.locator) scene.locator = clone(saved.locator);
+        if (saved.view) {
+            scene.map.jumpTo({
+                center: [saved.view.lng, saved.view.lat],
+                zoom: saved.view.zoom,
+                bearing: saved.view.bearing || 0,
+                pitch: saved.view.pitch || 0
+            });
+        }
+    });
+
+    refreshSceneVisibility();
+    await Promise.all(getVisibleScenes().map(whenSceneReady));
+    scenes.forEach(scene => {
+        applyMapLabelVisibility(scene);
+        updateSceneAnnotation(scene);
+        updateSceneLocator(scene);
+        redrawDrawings(scene);
+    });
+    renderDrawingList();
+    renderShapeList();
+    setActiveScene(meta.activeSceneIndex || 0);
+    setPreviewText();
+}
+
+window.serializeState = serializeState;
+window.applyState = applyState;
+window.generatePieceThumbnail = generatePieceThumbnail;
+
+// ---- Cliente da API de pecas (usado pela galeria na Fase 4) ----
+let currentPieceId = null;
+window.getCurrentPieceId = () => currentPieceId;
+
+async function savePiece({id = currentPieceId, title} = {}) {
+    const thumbnail = await generatePieceThumbnail();
+    const state = serializeState();
+    const payloadTitle = title != null ? title : (titleInput.value || 'Sem título');
+    const url = id ? `/api/pieces/${id}` : '/api/pieces';
+    const method = id ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+        method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title: payloadTitle, state, thumbnail})
+    });
+    if (res.status === 401) { window.location.replace('/login.html'); return null; }
+    if (!res.ok) throw new Error('Não foi possível salvar a peça.');
+    const data = await res.json().catch(() => ({}));
+    if (data.id) currentPieceId = data.id;
+    return currentPieceId;
+}
+
+async function loadPiece(id) {
+    const res = await fetch(`/api/pieces/${id}`);
+    if (res.status === 401) { window.location.replace('/login.html'); return null; }
+    if (!res.ok) throw new Error('Não foi possível abrir a peça.');
+    const {piece} = await res.json();
+    await applyState(piece.state);
+    currentPieceId = piece.id;
+    return piece;
+}
+
+window.savePiece = savePiece;
+window.loadPiece = loadPiece;
+
+async function ensureSession() {
+    try {
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+            const data = await res.json();
+            return data.user || null;
+        }
+    } catch {}
+    return null;
+}
+
 async function initializeApp() {
+    setStatus('Verificando acesso...');
+    const user = await ensureSession();
+    if (!user) {
+        window.location.replace('/login.html');
+        return;
+    }
+    window.currentUser = user;
+
     setStatus('Carregando Mapbox...');
     mapboxToken = await resolveMapboxToken();
 
     if (!mapboxToken) {
-        setStatus('Token da Mapbox não configurado. Adicione MAPBOX_TOKEN na Vercel.');
+        setStatus('Token da Mapbox não configurado. Defina MAPBOX_TOKEN no servidor.');
         return;
     }
 
@@ -2403,6 +3106,7 @@ async function initializeApp() {
         renderShapeList();
     });
     downloadButton.addEventListener('click', exportJpg);
+    if (smartLabelsButton) smartLabelsButton.addEventListener('click', toggleSmartLabels);
 
     searchInput.addEventListener('keydown', event => {
         if (event.key === 'Enter') {
@@ -2411,9 +3115,57 @@ async function initializeApp() {
         }
     });
 
+    const saveButton = document.getElementById('save-button');
+    const saveAsButton = document.getElementById('save-as-button');
+    const logoutButton = document.getElementById('logout-button');
+
+    async function handleSave(forceNew) {
+        try {
+            if (saveButton) saveButton.disabled = true;
+            if (saveAsButton) saveAsButton.disabled = true;
+            const suggested = titleInput.value || 'Sem título';
+            let title = suggested;
+            if (forceNew || !currentPieceId) {
+                const input = window.prompt('Nome da peça:', suggested);
+                if (input === null) return;
+                title = input.trim() || suggested;
+                titleInput.value = title;
+                setPreviewText();
+            }
+            setStatus('Salvando peça...');
+            const id = await savePiece({id: forceNew ? null : currentPieceId, title});
+            if (id) setStatus('Peça salva na galeria.');
+        } catch (err) {
+            setStatus(err.message || 'Não foi possível salvar a peça.');
+        } finally {
+            if (saveButton) saveButton.disabled = false;
+            if (saveAsButton) saveAsButton.disabled = false;
+        }
+    }
+
+    if (saveButton) saveButton.addEventListener('click', () => handleSave(false));
+    if (saveAsButton) saveAsButton.addEventListener('click', () => handleSave(true));
+    if (logoutButton) logoutButton.addEventListener('click', async () => {
+        try { await fetch('/api/auth/logout', {method: 'POST'}); } catch {}
+        window.location.replace('/login.html');
+    });
+
     setPreviewText();
     refreshSceneVisibility();
     setActiveScene(0);
+    scenesInitialized = true;
+
+    // Abrir peça existente via ?piece=ID (vindo da galeria).
+    const pieceParam = new URLSearchParams(window.location.search).get('piece');
+    if (pieceParam) {
+        try {
+            setStatus('Abrindo peça...');
+            await loadPiece(pieceParam);
+            setStatus('Peça carregada.');
+        } catch {
+            setStatus('Não foi possível abrir a peça.');
+        }
+    }
 }
 
 initializeApp();

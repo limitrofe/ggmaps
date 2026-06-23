@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mapbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: mapbox
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mapbox -d mapbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://mapbox:${POSTGRES_PASSWORD}@db:5432/mapbox
+      MAPBOX_TOKEN: ${MAPBOX_TOKEN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  dbdata:
+  uploads:

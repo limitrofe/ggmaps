@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Administração — Gerador de mapas</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --ink:#10151c; --muted:#5b6573; --line:#dfe4ea; --brand:#f2671f; --ok:#1e8e3e; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:'Open Sans',system-ui,sans-serif; color:var(--ink); background:#f4f6f9; }
+    header { display:flex; align-items:center; justify-content:space-between;
+      padding:16px 24px; background:#fff; border-bottom:1px solid var(--line); }
+    header h1 { font-size:1.05rem; margin:0; }
+    header .who { font-size:.85rem; color:var(--muted); }
+    header a, header button { font-size:.85rem; }
+    main { max-width:880px; margin:24px auto; padding:0 16px; display:grid; gap:24px; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; }
+    .panel h2 { font-size:.95rem; margin:0 0 14px; }
+    .seats { font-size:.9rem; color:var(--muted); margin-bottom:8px; }
+    .seats b { color:var(--ink); }
+    table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; font-size:.78rem; text-transform:uppercase; }
+    .tag { font-size:.72rem; padding:2px 8px; border-radius:20px; background:#eef1f5; }
+    .tag.off { background:#fde8e8; color:#c0392b; }
+    .tag.on { background:#e7f6ec; color:var(--ok); }
+    form.row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+    form.row .full { grid-column:1 / -1; }
+    input, select, button { font:inherit; padding:9px 11px; border:1px solid var(--line); border-radius:8px; }
+    input:focus, select:focus { outline:2px solid var(--brand); border-color:var(--brand); }
+    button.primary { background:var(--brand); color:#fff; border:0; font-weight:700; cursor:pointer; }
+    button.link { background:none; border:0; color:var(--brand); cursor:pointer; padding:4px; }
+    .msg { font-size:.85rem; margin-top:10px; min-height:1.1em; }
+    .msg.err { color:#c0392b; } .msg.ok { color:var(--ok); }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Administração</h1>
+    <div>
+      <span class="who" id="who"></span>
+      <a href="/">← Editor</a>
+      <button class="link" id="logout">Sair</button>
+    </div>
+  </header>
+  <main>
+    <section class="panel" id="groups-panel">
+      <h2>Grupos (clientes)</h2>
+      <table><thead><tr><th>Nome</th><th>Cadeiras</th><th>Status</th></tr></thead>
+        <tbody id="groups-body"></tbody></table>
+      <form class="row" id="group-form">
+        <input class="full" id="g-name" placeholder="Nome do grupo / cliente" required />
+        <input id="g-seats" type="number" min="0" placeholder="Cadeiras" required />
+        <button class="primary" type="submit">Criar grupo</button>
+      </form>
+      <div class="msg" id="group-msg"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Usuários</h2>
+      <div class="seats" id="seats"></div>
+      <div id="group-picker-wrap" class="hidden" style="margin-bottom:12px;">
+        <select id="group-picker"></select>
+      </div>
+      <table><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Status</th><th></th></tr></thead>
+        <tbody id="users-body"></tbody></table>
+      <form class="row" id="user-form">
+        <input id="u-name" placeholder="Nome" required />
+        <input id="u-email" type="email" placeholder="E-mail" required />
+        <input id="u-pass" type="text" placeholder="Senha (mín. 8)" required />
+        <select id="u-role"><option value="editor">Editor</option><option value="admin">Admin do grupo</option></select>
+        <button class="primary full" type="submit">Adicionar usuário</button>
+      </form>
+      <div class="msg" id="user-msg"></div>
+    </section>
+  </main>
+  <script type="module" src="./admin.js"></script>
+</body>
+</html>

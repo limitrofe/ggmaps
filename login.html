@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Entrar — Gerador de mapas</title>
+  <link rel="icon" href="data:," />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --ink:#10151c; --muted:#5b6573; --line:#dfe4ea; --brand:#f2671f; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Open Sans',system-ui,sans-serif; color:var(--ink);
+      background:#f4f6f9; display:grid; place-items:center; min-height:100vh; }
+    .card { width:min(380px,92vw); background:#fff; border:1px solid var(--line);
+      border-radius:14px; padding:32px; box-shadow:0 8px 30px rgba(16,21,28,.06); }
+    h1 { font-size:1.25rem; margin:0 0 4px; }
+    p.sub { margin:0 0 24px; color:var(--muted); font-size:.9rem; }
+    label { display:block; font-size:.8rem; font-weight:700; margin:14px 0 6px; }
+    input { width:100%; padding:11px 12px; border:1px solid var(--line);
+      border-radius:9px; font-size:.95rem; }
+    input:focus { outline:2px solid var(--brand); border-color:var(--brand); }
+    button { margin-top:22px; width:100%; padding:12px; border:0; border-radius:9px;
+      background:var(--brand); color:#fff; font-weight:700; font-size:.95rem; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:default; }
+    .msg { margin-top:14px; font-size:.85rem; min-height:1.2em; color:#c0392b; }
+  </style>
+</head>
+<body>
+  <form class="card" id="login-form">
+    <h1>Gerador de mapas</h1>
+    <p class="sub">Entre com seu e-mail e senha.</p>
+    <label for="email">E-mail</label>
+    <input id="email" type="email" autocomplete="username" required />
+    <label for="password">Senha</label>
+    <input id="password" type="password" autocomplete="current-password" required />
+    <button type="submit" id="submit">Entrar</button>
+    <div class="msg" id="msg" role="alert"></div>
+  </form>
+  <script type="module" src="./login.js"></script>
+</body>
+</html>

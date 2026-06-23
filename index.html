@@ -7,7 +7,7 @@
     <link rel="icon" href="data:,">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;700;900&family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.css" rel="stylesheet">
     <link rel="stylesheet" href="./styles.css">
 </head>
@@ -19,7 +19,13 @@
             <aside class="controls-panel">
 
                 <div class="ctrl-header">
-                    <h1>Gerador de mapas</h1>
+                    <div class="ctrl-header__top">
+                        <h1>Gerador de mapas</h1>
+                        <nav class="ctrl-nav">
+                            <a href="/galeria.html" class="ctrl-nav__link">Galeria</a>
+                            <button id="logout-button" type="button" class="ctrl-nav__link">Sair</button>
+                        </nav>
+                    </div>
                     <p id="status">Mapa pronto para edição.</p>
                 </div>
 
@@ -39,6 +45,15 @@
                                 </div>
                             </label>
                             <div id="search-results" class="search-results" aria-live="polite"></div>
+                        </div>
+                    </details>
+
+                    <!-- Rótulos inteligentes (beta, isolado) -->
+                    <details class="tool-section">
+                        <summary class="tool-section__header">Rótulos inteligentes (beta)</summary>
+                        <div class="tool-section__body">
+                            <p class="smart-hint">Busca cidades, rios e vias ao redor da <strong>cena ativa</strong> e desenha os rótulos por conta própria, com controle de borda (sem corte) e sem sobreposição. Experimental — não substitui os controles atuais.</p>
+                            <button id="smart-labels-button" class="ghost-button" type="button">Ativar na cena ativa</button>
                         </div>
                     </details>
 
@@ -130,6 +145,10 @@
                                 <button class="height-preset-button" type="button" data-height="900">Gigante</button>
                             </div>
                             <button id="download-button" class="primary-button" type="button">Baixar JPG</button>
+                            <div class="save-actions">
+                                <button id="save-button" class="primary-button" type="button">Salvar</button>
+                                <button id="save-as-button" class="ghost-button" type="button">Salvar como nova</button>
+                            </div>
                         </div>
                     </details>
 
@@ -406,6 +425,6 @@
     </main>
 
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.17.0/mapbox-gl.js"></script>
-    <script src="./app.js" defer></script>
+    <script type="module" src="./app.js"></script>
 </body>
 </html>

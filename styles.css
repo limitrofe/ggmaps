@@ -861,3 +861,54 @@ select:disabled {
         grid-template-columns: 1fr;
     }
 }
+
+/* ---- Header nav + ações de salvar (Fase 4) ---- */
+.ctrl-header__top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.ctrl-nav {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.ctrl-nav__link {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    background: none;
+    border: 0;
+    padding: 2px 4px;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.ctrl-nav__link:hover {
+    text-decoration: underline;
+}
+
+.save-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.ghost-button {
+    min-height: 46px;
+    padding: 0 12px;
+    font-weight: 700;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.ghost-button:hover {
+    background: #f0f3f7;
+}
