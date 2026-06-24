@@ -10,7 +10,7 @@ const sourceFont = '400 20px "Open Sans"';
 const labelFont = '900 22px "Open Sans"';
 const editorialLabelFont = '900 20px "Open Sans"';
 const red = '#c81712';
-const maxScenes = 4;
+const maxScenes = 10;
 
 const titleInput = document.getElementById('title-input');
 const deckInput = document.getElementById('deck-input');
