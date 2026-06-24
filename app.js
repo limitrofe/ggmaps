@@ -493,6 +493,26 @@ function hexToRgba(hex, alpha = 1) {
     return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
+// Posiciona/escala a imagem dentro da área do bloco (preview). A área tem
+// 650px de largura (= outputWidth), então é 1:1 com o export. imageFit define
+// o ajuste-base (cobrir/conter); imgScale multiplica; imgX/imgY deslocam (px).
+function applyImageLayout(block) {
+    const img = block.imgEl;
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+    const boxW = outputWidth;
+    const boxH = block.height || IMAGE_BLOCK_DEFAULT_HEIGHT;
+    const base = block.imageFit === 'contain'
+        ? Math.min(boxW / img.naturalWidth, boxH / img.naturalHeight)
+        : Math.max(boxW / img.naturalWidth, boxH / img.naturalHeight);
+    const scale = base * (block.imgScale || 1);
+    const dw = img.naturalWidth * scale;
+    const dh = img.naturalHeight * scale;
+    img.style.width = `${dw}px`;
+    img.style.height = `${dh}px`;
+    img.style.left = `${(boxW - dw) / 2 + (block.imgX || 0)}px`;
+    img.style.top = `${(boxH - dh) / 2 + (block.imgY || 0)}px`;
+}
+
 // Cria o objeto + DOM de um bloco de imagem (sem dados ainda).
 function createImageBlock(data = {}) {
     const block = {
@@ -506,6 +526,9 @@ function createImageBlock(data = {}) {
         captionW: typeof data.captionW === 'number' ? data.captionW : 45,
         captionBg: data.captionBg || '#000000',
         captionOpacity: typeof data.captionOpacity === 'number' ? data.captionOpacity : 0.6,
+        imgScale: typeof data.imgScale === 'number' ? data.imgScale : 1,
+        imgX: typeof data.imgX === 'number' ? data.imgX : 0,
+        imgY: typeof data.imgY === 'number' ? data.imgY : 0,
         height: data.height || IMAGE_BLOCK_DEFAULT_HEIGHT,
         annotations: Array.isArray(data.annotations) ? clone(data.annotations) : []
     };
@@ -520,7 +543,7 @@ function createImageBlock(data = {}) {
     const img = document.createElement('img');
     img.className = 'image-scene__img';
     img.alt = '';
-    img.style.objectFit = block.imageFit;
+    img.addEventListener('load', () => applyImageLayout(block));
     if (block.imageData) img.src = block.imageData; else img.hidden = true;
 
     const placeholder = document.createElement('button');
@@ -630,8 +653,41 @@ function createImageBlock(data = {}) {
     fitBtn.addEventListener('click', event => {
         event.stopPropagation();
         block.imageFit = block.imageFit === 'cover' ? 'contain' : 'cover';
-        img.style.objectFit = block.imageFit;
+        applyImageLayout(block);
         updateFitLabel();
+    });
+
+    const zoomOutBtn = document.createElement('button');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.className = 'image-scene__zoom';
+    zoomOutBtn.textContent = '−';
+    zoomOutBtn.title = 'Diminuir a imagem';
+    zoomOutBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        block.imgScale = Math.max(0.2, (block.imgScale || 1) - 0.1);
+        applyImageLayout(block);
+    });
+
+    const zoomInBtn = document.createElement('button');
+    zoomInBtn.type = 'button';
+    zoomInBtn.className = 'image-scene__zoom';
+    zoomInBtn.textContent = '+';
+    zoomInBtn.title = 'Aumentar a imagem';
+    zoomInBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        block.imgScale = Math.min(5, (block.imgScale || 1) + 0.1);
+        applyImageLayout(block);
+    });
+
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'image-scene__zoom';
+    resetBtn.textContent = '⟲';
+    resetBtn.title = 'Reposicionar imagem';
+    resetBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        block.imgScale = 1; block.imgX = 0; block.imgY = 0;
+        applyImageLayout(block);
     });
 
     const opacityWrap = document.createElement('label');
@@ -660,7 +716,7 @@ function createImageBlock(data = {}) {
         addImageAnnotation(block);
     });
 
-    controls.append(fitBtn, opacityWrap, annotationBtn);
+    controls.append(fitBtn, zoomOutBtn, zoomInBtn, resetBtn, opacityWrap, annotationBtn);
 
     // Alça inferior para ajustar a altura do bloco.
     const heightHandle = document.createElement('div');
@@ -675,6 +731,7 @@ function createImageBlock(data = {}) {
         const move = ev => {
             block.height = Math.max(120, Math.min(1200, startH + (ev.clientY - startY)));
             el.style.height = `${block.height}px`;
+            applyImageLayout(block);
         };
         const up = () => {
             window.removeEventListener('pointermove', move);
@@ -690,7 +747,30 @@ function createImageBlock(data = {}) {
         if (imageBlockFileInput) { imageBlockFileInput.value = ''; imageBlockFileInput.click(); }
     };
     placeholder.addEventListener('click', openPicker);
-    img.addEventListener('click', openPicker);
+
+    // Arrastar a imagem reposiciona (pan) dentro da área; clique sem arraste
+    // (re)abre o seletor para trocar a imagem.
+    let imgMoved = false;
+    img.addEventListener('pointerdown', event => {
+        if (!block.imageData) return;
+        event.preventDefault();
+        activeBlockId = block.id;
+        imgMoved = false;
+        const start = {x: event.clientX, y: event.clientY, ix: block.imgX || 0, iy: block.imgY || 0};
+        const move = ev => {
+            if (Math.abs(ev.clientX - start.x) > 3 || Math.abs(ev.clientY - start.y) > 3) imgMoved = true;
+            block.imgX = start.ix + (ev.clientX - start.x);
+            block.imgY = start.iy + (ev.clientY - start.y);
+            applyImageLayout(block);
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+    img.addEventListener('click', () => { if (block.imageData && !imgMoved) openPicker(); });
     el.addEventListener('mousedown', () => { activeBlockId = block.id; updateBlockControls(); });
 
     inner.append(img, placeholder);
@@ -702,42 +782,109 @@ function createImageBlock(data = {}) {
     block.placeholderEl = placeholder;
     block.captionEl = caption;
     // Recria as anotações salvas (texto/ícone) sobre a imagem.
-    block.annotations.forEach(ann => el.append(createImageAnnotationEl(block, ann)));
+    block.annotations.forEach(ann => createImageAnnotationEl(block, ann));
     mapsStack.append(el);
     return block;
 }
 
-// Cria o DOM de uma anotação (ícone + texto) sobre um bloco de imagem.
-// Posição em % do bloco; arrastável; ícone cicla dot/square/triangle/none.
-function createImageAnnotationEl(block, ann) {
-    const node = document.createElement('div');
-    node.className = 'image-annotation';
-    node.style.left = `${ann.x}%`;
-    node.style.top = `${ann.y}%`;
-
-    const symbol = document.createElement('button');
-    symbol.type = 'button';
-    symbol.className = 'image-annotation__symbol';
-    symbol.title = 'Trocar ícone';
-    const applySymbol = () => {
-        symbol.dataset.symbol = ann.symbol;
-        symbol.style.display = ann.symbol === 'none' ? 'none' : '';
-    };
-    const order = ['dot', 'square', 'triangle', 'none'];
-    symbol.addEventListener('click', event => {
-        event.stopPropagation();
-        ann.symbol = order[(order.indexOf(ann.symbol) + 1) % order.length];
-        applySymbol();
+// Helper de arraste em % do bloco (devolve onMove(x%, y%, ev)).
+function dragInBlock(handle, block, onMove, stopClick = true) {
+    handle.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        if (stopClick) event.stopPropagation();
+        activeBlockId = block.id;
+        const rect = block.el.getBoundingClientRect();
+        const move = ev => onMove(
+            Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100)),
+            Math.max(0, Math.min(100, ((ev.clientY - rect.top) / rect.height) * 100)),
+            ev
+        );
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
     });
-    applySymbol();
+}
 
-    const text = document.createElement('input');
-    text.type = 'text';
-    text.className = 'image-annotation__text';
-    text.placeholder = 'Texto';
-    text.value = ann.text;
-    text.addEventListener('input', () => { ann.text = text.value; });
-    text.addEventListener('pointerdown', event => event.stopPropagation()); // editar sem arrastar
+// Cria o DOM de uma anotação: um ÍCONE (ponto fixo) e uma CAIXA DE TEXTO
+// independente, que pode ser movida em volta do ícone e ter a largura ajustada.
+function createImageAnnotationEl(block, ann) {
+    // Defaults / migração de anotações antigas (que não tinham tx/ty/tw).
+    if (!ann.symbol) ann.symbol = 'dot';
+    if (typeof ann.tx !== 'number') ann.tx = Math.min(96, (ann.x ?? 45) + 3);
+    if (typeof ann.ty !== 'number') ann.ty = (ann.y ?? 45);
+    if (typeof ann.tw !== 'number') ann.tw = 22;
+
+    const order = ['dot', 'square', 'triangle', 'none'];
+
+    // ----- ÍCONE (ponto) -----
+    const icon = document.createElement('button');
+    icon.type = 'button';
+    icon.className = 'image-annotation__icon';
+    icon.title = 'Clique troca o ícone · arraste move o ponto';
+    const applyIcon = () => {
+        icon.dataset.symbol = ann.symbol;
+        icon.style.left = `${ann.x}%`;
+        icon.style.top = `${ann.y}%`;
+        icon.style.display = ann.symbol === 'none' ? 'none' : '';
+    };
+    applyIcon();
+    let movedIcon = false;
+    icon.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        activeBlockId = block.id;
+        movedIcon = false;
+        const rect = block.el.getBoundingClientRect();
+        const start = {x: event.clientX, y: event.clientY};
+        const move = ev => {
+            if (Math.abs(ev.clientX - start.x) > 3 || Math.abs(ev.clientY - start.y) > 3) movedIcon = true;
+            ann.x = Math.max(0, Math.min(98, ((ev.clientX - rect.left) / rect.width) * 100));
+            ann.y = Math.max(0, Math.min(97, ((ev.clientY - rect.top) / rect.height) * 100));
+            icon.style.left = `${ann.x}%`;
+            icon.style.top = `${ann.y}%`;
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            if (!movedIcon) { // clique sem arrastar = trocar ícone
+                ann.symbol = order[(order.indexOf(ann.symbol) + 1) % order.length];
+                applyIcon();
+            }
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+
+    // ----- CAIXA DE TEXTO (independente) -----
+    const box = document.createElement('div');
+    box.className = 'image-annotation__box';
+    const applyBox = () => {
+        box.style.left = `${ann.tx}%`;
+        box.style.top = `${ann.ty}%`;
+        box.style.width = `${ann.tw}%`;
+    };
+    applyBox();
+
+    const grip = document.createElement('span');
+    grip.className = 'image-annotation__grip';
+    grip.textContent = '⠿';
+    grip.title = 'Arraste para mover o texto';
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'image-annotation__text';
+    textarea.rows = 1;
+    textarea.placeholder = 'Texto';
+    textarea.value = ann.text;
+    const autoSize = () => { textarea.style.height = 'auto'; textarea.style.height = `${textarea.scrollHeight}px`; };
+    textarea.addEventListener('input', () => { ann.text = textarea.value; autoSize(); });
+
+    const widthHandle = document.createElement('span');
+    widthHandle.className = 'image-annotation__width';
+    widthHandle.textContent = '⇿';
+    widthHandle.title = 'Arraste para mudar a largura';
 
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -747,40 +894,25 @@ function createImageAnnotationEl(block, ann) {
     remove.addEventListener('click', event => {
         event.stopPropagation();
         block.annotations = block.annotations.filter(a => a.id !== ann.id);
-        node.remove();
+        icon.remove();
+        box.remove();
     });
 
-    // Arraste pela área da anotação (menos o campo de texto).
-    node.addEventListener('pointerdown', event => {
-        if (event.target === text) return;
-        event.preventDefault();
-        activeBlockId = block.id;
-        const rect = block.el.getBoundingClientRect();
-        const move = ev => {
-            ann.x = Math.max(0, Math.min(96, ((ev.clientX - rect.left) / rect.width) * 100));
-            ann.y = Math.max(0, Math.min(94, ((ev.clientY - rect.top) / rect.height) * 100));
-            node.style.left = `${ann.x}%`;
-            node.style.top = `${ann.y}%`;
-        };
-        const up = () => {
-            window.removeEventListener('pointermove', move);
-            window.removeEventListener('pointerup', up);
-        };
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', up);
-    });
+    dragInBlock(grip, block, (x, y) => { ann.tx = Math.min(98, x); ann.ty = Math.min(97, y); applyBox(); });
+    dragInBlock(widthHandle, block, x => { ann.tw = Math.max(8, Math.min(95, x - ann.tx)); applyBox(); autoSize(); });
 
-    node.append(symbol, text, remove);
-    return node;
+    box.append(grip, textarea, widthHandle, remove);
+    block.el.append(icon, box);
+    autoSize();
 }
 
 // Adiciona uma nova anotação ao centro do bloco de imagem.
 function addImageAnnotation(block) {
-    const ann = {id: `imgann-${annotationIdCounter++}`, x: 45, y: 45, text: '', symbol: 'dot'};
+    const ann = {id: `imgann-${annotationIdCounter++}`, x: 45, y: 45, tx: 49, ty: 45, tw: 22, text: '', symbol: 'dot'};
     block.annotations.push(ann);
-    block.el.append(createImageAnnotationEl(block, ann));
+    createImageAnnotationEl(block, ann);
     activeBlockId = block.id;
-    setStatus('Anotação adicionada. Arraste para posicionar.');
+    setStatus('Anotação adicionada. O ícone fica no ponto; arraste o texto à parte.');
 }
 
 // Adiciona um bloco de imagem logo após o bloco ativo (permite intercalar
@@ -2613,12 +2745,15 @@ function drawImageBlock(ctx, block, y, h) {
     const entry = block.imageData ? imageCache.get(block.imageData) : null;
     const img = entry && entry.image;
     if (img && img.width && img.height) {
-        const scale = block.imageFit === 'contain'
+        const base = block.imageFit === 'contain'
             ? Math.min(outputWidth / img.width, h / img.height)
             : Math.max(outputWidth / img.width, h / img.height);
+        const scale = base * (block.imgScale || 1);
         const dw = img.width * scale;
         const dh = img.height * scale;
-        ctx.drawImage(img, (outputWidth - dw) / 2, y + (h - dh) / 2, dw, dh);
+        const dx = (outputWidth - dw) / 2 + (block.imgX || 0);
+        const dy = y + (h - dh) / 2 + (block.imgY || 0);
+        ctx.drawImage(img, dx, dy, dw, dh);
     }
 
     const caption = normalizeText(block.caption);
@@ -2650,51 +2785,54 @@ function drawImageBlock(ctx, block, y, h) {
         lines.forEach((line, i) => ctx.fillText(line, px + padX, py + padY + i * lineH));
     }
 
-    // Anotações (ícone + texto) ancoradas por % do bloco.
+    // Anotações: ícone no ponto (x,y) e caixa de texto independente (tx,ty,tw).
     (block.annotations || []).forEach(ann => {
-        const baseX = (ann.x / 100) * outputWidth;
-        const baseY = y + (ann.y / 100) * h;
-        const pillH = 26;
         const s = 16;
-        let cursorX = baseX;
         if (ann.symbol && ann.symbol !== 'none') {
+            const sx = (ann.x / 100) * outputWidth;
+            const sy = y + (ann.y / 100) * h;
             ctx.fillStyle = red;
-            const symY = baseY + (pillH - s) / 2;
             if (ann.symbol === 'dot') {
                 ctx.beginPath();
-                ctx.arc(baseX + s / 2, symY + s / 2, s / 2, 0, Math.PI * 2);
+                ctx.arc(sx + s / 2, sy + s / 2, s / 2, 0, Math.PI * 2);
                 ctx.fill();
             } else if (ann.symbol === 'square') {
-                ctx.fillRect(baseX, symY, s, s);
+                ctx.fillRect(sx, sy, s, s);
             } else if (ann.symbol === 'triangle') {
                 ctx.beginPath();
-                ctx.moveTo(baseX + s / 2, symY);
-                ctx.lineTo(baseX + s, symY + s);
-                ctx.lineTo(baseX, symY + s);
+                ctx.moveTo(sx + s / 2, sy);
+                ctx.lineTo(sx + s, sy + s);
+                ctx.lineTo(sx, sy + s);
                 ctx.closePath();
                 ctx.fill();
             }
-            cursorX = baseX + s + 6;
         }
         const txt = normalizeText(ann.text);
         if (txt) {
             ctx.font = '16px "Open Sans", Arial, Helvetica, sans-serif';
             ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
+            ctx.textBaseline = 'top';
             const padX = 8;
-            const tw = ctx.measureText(txt).width;
-            const pillW = tw + padX * 2;
+            const padY = 4;
+            const lineH = 20;
+            const tw = typeof ann.tw === 'number' ? ann.tw : 22;
+            const boxW = Math.max(40, (tw / 100) * outputWidth);
+            const lines = wrapText(ctx, ann.text, boxW - padX * 2);
+            const boxH = lines.length * lineH + padY * 2;
+            let bx = ((typeof ann.tx === 'number' ? ann.tx : ann.x) / 100) * outputWidth;
+            let by = y + ((typeof ann.ty === 'number' ? ann.ty : ann.y) / 100) * h;
+            bx = Math.max(0, Math.min(outputWidth - boxW, bx));
+            by = Math.max(y, Math.min(y + h - boxH, by));
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
             if (ctx.roundRect) {
                 ctx.beginPath();
-                ctx.roundRect(cursorX, baseY, pillW, pillH, 5);
+                ctx.roundRect(bx, by, boxW, boxH, 5);
                 ctx.fill();
             } else {
-                ctx.fillRect(cursorX, baseY, pillW, pillH);
+                ctx.fillRect(bx, by, boxW, boxH);
             }
             ctx.fillStyle = '#ffffff';
-            ctx.fillText(txt, cursorX + padX, baseY + pillH / 2 + 1);
-            ctx.textBaseline = 'top';
+            lines.forEach((line, i) => ctx.fillText(line, bx + padX, by + padY + i * lineH));
         }
     });
 
@@ -3458,6 +3596,9 @@ function serializeState() {
                 captionW: block.captionW,
                 captionBg: block.captionBg,
                 captionOpacity: block.captionOpacity,
+                imgScale: block.imgScale,
+                imgX: block.imgX,
+                imgY: block.imgY,
                 height: block.height,
                 annotations: clone(block.annotations || [])
             })
