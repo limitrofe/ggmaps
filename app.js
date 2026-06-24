@@ -10,13 +10,14 @@ const sourceFont = '400 20px "Open Sans"';
 const labelFont = '900 22px "Open Sans"';
 const editorialLabelFont = '900 20px "Open Sans"';
 const red = '#c81712';
-const maxScenes = 3;
+const maxScenes = 4;
 
 const titleInput = document.getElementById('title-input');
 const deckInput = document.getElementById('deck-input');
 const sourceInput = document.getElementById('source-input');
-const sceneCountInput = document.getElementById('scene-count-input');
 const activeSceneInput = document.getElementById('active-scene-input');
+const addSceneButton = document.getElementById('add-scene-button');
+const removeSceneButton = document.getElementById('remove-scene-button');
 const searchInput = document.getElementById('search-input');
 const searchButton = document.getElementById('search-button');
 const searchResults = document.getElementById('search-results');
@@ -332,8 +333,76 @@ function createScene(index) {
 }
 
 function getVisibleScenes() {
-    const count = Number.parseInt(sceneCountInput.value, 10) || 1;
-    return scenes.slice(0, Math.max(1, Math.min(maxScenes, count)));
+    // A coluna central agora é uma lista dinâmica de blocos: todas as cenas
+    // do array são visíveis (sem mais o seletor fixo de "nº de cenas").
+    return scenes;
+}
+
+// Reconstrói as opções do seletor "Editando" conforme o nº atual de blocos.
+function refreshSceneSelectorOptions() {
+    if (!activeSceneInput) return;
+    activeSceneInput.innerHTML = '';
+    scenes.forEach((scene, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `Mapa ${i + 1}`;
+        activeSceneInput.append(opt);
+    });
+    activeSceneInput.value = String(Math.min(activeSceneIndex, scenes.length - 1));
+}
+
+// Habilita/desabilita os botões de adicionar/remover conforme o limite.
+function updateBlockControls() {
+    if (addSceneButton) addSceneButton.disabled = scenes.length >= maxScenes;
+    if (removeSceneButton) removeSceneButton.disabled = scenes.length <= 1;
+}
+
+// Remove os mapas Mapbox e o DOM de uma cena (usado ao remover bloco).
+function teardownScene(scene) {
+    try { scene.locatorMaps.forEach(lm => lm.map && lm.map.remove()); } catch {}
+    try { scene.map && scene.map.remove(); } catch {}
+    if (scene.sceneEl) scene.sceneEl.remove();
+}
+
+// Adiciona um novo bloco de mapa ao final, herdando o centro do anterior.
+function addSceneBlock() {
+    if (scenes.length >= maxScenes) {
+        setStatus(`Limite de ${maxScenes} blocos atingido.`);
+        return;
+    }
+    const scene = createScene(scenes.length);
+    scenes.push(scene);
+    refreshSceneSelectorOptions();
+    refreshSceneVisibility();
+    setActiveScene(scenes.length - 1);
+    updateBlockControls();
+    setStatus(`Mapa ${scenes.length} adicionado.`);
+}
+
+// Remove o último bloco (mantém ao menos 1). Desenhos/formas são globais
+// (coordenadas geográficas) e não precisam de limpeza.
+function removeSceneBlock() {
+    if (scenes.length <= 1) {
+        setStatus('É preciso ter ao menos 1 mapa.');
+        return;
+    }
+    const scene = scenes.pop();
+    teardownScene(scene);
+    if (activeSceneIndex >= scenes.length) activeSceneIndex = scenes.length - 1;
+    refreshSceneSelectorOptions();
+    refreshSceneVisibility();
+    setActiveScene(activeSceneIndex);
+    updateBlockControls();
+    setStatus(`Mapa removido. ${scenes.length} bloco(s) restante(s).`);
+}
+
+// Garante que o array tenha exatamente n blocos (usado ao carregar peças).
+function ensureSceneCount(n) {
+    const target = Math.max(1, Math.min(maxScenes, n));
+    while (scenes.length < target) scenes.push(createScene(scenes.length));
+    while (scenes.length > target) teardownScene(scenes.pop());
+    refreshSceneSelectorOptions();
+    updateBlockControls();
 }
 
 function getActiveScene() {
@@ -2718,7 +2787,7 @@ function serializeState() {
             title: titleInput.value,
             deck: deckInput.value,
             source: sourceInput.value,
-            sceneCount: Number.parseInt(sceneCountInput.value, 10) || 1,
+            sceneCount: scenes.length,
             activeSceneIndex,
             storyLocation: {...storyLocation},
             editorialImageData,
@@ -2770,7 +2839,8 @@ async function applyState(state) {
     titleInput.value = meta.title || '';
     deckInput.value = meta.deck || '';
     sourceInput.value = meta.source || '';
-    sceneCountInput.value = String(meta.sceneCount || state.scenes.length || 1);
+    // Cria/remove blocos para casar com a peça salva (compatível com v1).
+    ensureSceneCount(state.scenes.length || meta.sceneCount || 1);
     if (meta.storyLocation) storyLocation = {...meta.storyLocation};
     editorialImageData = meta.editorialImageData || '';
     if (meta.counters) {
@@ -2889,9 +2959,8 @@ async function initializeApp() {
 
     mapboxgl.accessToken = mapboxToken;
 
-    for (let index = 0; index < maxScenes; index += 1) {
-        scenes.push(createScene(index));
-    }
+    // Começa com 1 bloco de mapa; o usuário adiciona os demais pelo botão "+".
+    scenes.push(createScene(0));
 
     window.editorScenes = scenes;
 
@@ -2899,7 +2968,8 @@ async function initializeApp() {
         input.addEventListener('input', setPreviewText);
     });
 
-    sceneCountInput.addEventListener('change', refreshSceneVisibility);
+    if (addSceneButton) addSceneButton.addEventListener('click', addSceneBlock);
+    if (removeSceneButton) removeSceneButton.addEventListener('click', removeSceneBlock);
     activeSceneInput.addEventListener('change', event => setActiveScene(Number.parseInt(event.target.value, 10) || 0));
     mapHeightInput.addEventListener('input', event => setSceneHeight(event.target.value));
     heightPresetButtons.forEach(button => {
@@ -3151,6 +3221,8 @@ async function initializeApp() {
     });
 
     setPreviewText();
+    refreshSceneSelectorOptions();
+    updateBlockControls();
     refreshSceneVisibility();
     setActiveScene(0);
     scenesInitialized = true;

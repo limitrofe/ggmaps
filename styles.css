@@ -491,6 +491,53 @@ select:disabled {
     box-shadow: 0 16px 36px rgba(20, 29, 42, 0.12);
 }
 
+.block-controls {
+    width: 650px;
+    margin: 12px auto 0;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+}
+
+.block-add-button,
+.block-remove-button {
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 999px;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    color: #ffffff;
+    background: var(--accent);
+    box-shadow: 0 4px 12px rgba(20, 29, 42, 0.18);
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.block-add-button:hover,
+.block-remove-button:hover {
+    background: var(--accent-dark);
+}
+
+.block-add-button:active,
+.block-remove-button:active {
+    transform: translateY(1px);
+}
+
+.block-remove-button {
+    background: #6b7280;
+}
+
+.block-remove-button:hover {
+    background: #4b5563;
+}
+
+.block-add-button:disabled,
+.block-remove-button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
 .text-stack {
     display: grid;
     gap: 12px;

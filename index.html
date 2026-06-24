@@ -82,22 +82,13 @@
                         <div class="tool-section__body">
                             <div class="coordinate-grid">
                                 <label class="field">
-                                    <span>Nº de cenas</span>
-                                    <select id="scene-count-input">
-                                        <option value="1">1 mapa</option>
-                                        <option value="2" selected>2 mapas</option>
-                                        <option value="3">3 mapas</option>
-                                    </select>
-                                </label>
-                                <label class="field">
                                     <span>Editando</span>
                                     <select id="active-scene-input">
-                                        <option value="0">Cena 1</option>
-                                        <option value="1">Cena 2</option>
-                                        <option value="2">Cena 3</option>
+                                        <option value="0">Mapa 1</option>
                                     </select>
                                 </label>
                             </div>
+                            <p class="smart-hint">Use o botão <strong>+</strong> abaixo dos mapas para adicionar blocos (até 4). Cada novo mapa herda o centro do anterior.</p>
                         </div>
                     </details>
 
@@ -164,6 +155,10 @@
                     </header>
                     <div id="maps-stack" class="maps-stack" aria-label="Sequência de mapas"></div>
                     <p id="preview-source" class="source-line">Fonte: Mapbox</p>
+                </div>
+                <div class="block-controls" aria-label="Adicionar ou remover blocos">
+                    <button id="add-scene-button" class="block-add-button" type="button" title="Adicionar mapa">+</button>
+                    <button id="remove-scene-button" class="block-remove-button" type="button" title="Remover último mapa">−</button>
                 </div>
             </section>
 
