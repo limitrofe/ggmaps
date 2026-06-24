@@ -500,7 +500,8 @@ select:disabled {
 }
 
 .block-add-button,
-.block-remove-button {
+.block-remove-button,
+.block-move-button {
     width: 40px;
     height: 40px;
     border: none;
@@ -514,26 +515,29 @@ select:disabled {
     transition: background 0.15s ease, transform 0.1s ease;
 }
 
-.block-add-button:hover,
-.block-remove-button:hover {
+.block-add-button:hover {
     background: var(--accent-dark);
 }
 
 .block-add-button:active,
-.block-remove-button:active {
+.block-remove-button:active,
+.block-move-button:active {
     transform: translateY(1px);
 }
 
-.block-remove-button {
+.block-remove-button,
+.block-move-button {
     background: #6b7280;
 }
 
-.block-remove-button:hover {
+.block-remove-button:hover,
+.block-move-button:hover {
     background: #4b5563;
 }
 
 .block-add-button:disabled,
-.block-remove-button:disabled {
+.block-remove-button:disabled,
+.block-move-button:disabled {
     opacity: 0.4;
     cursor: not-allowed;
 }

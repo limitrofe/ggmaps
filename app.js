@@ -19,6 +19,8 @@ const activeSceneInput = document.getElementById('active-scene-input');
 const addSceneButton = document.getElementById('add-scene-button');
 const removeSceneButton = document.getElementById('remove-scene-button');
 const addBlockMenu = document.getElementById('add-block-menu');
+const moveUpButton = document.getElementById('move-block-up');
+const moveDownButton = document.getElementById('move-block-down');
 const searchInput = document.getElementById('search-input');
 const searchButton = document.getElementById('search-button');
 const searchResults = document.getElementById('search-results');
@@ -261,7 +263,7 @@ function createScene(index) {
         applySymbolEdgeAvoidance(scene);
         updateSceneAnnotation(scene);
         updateSceneLocator(scene);
-        if (index === activeSceneIndex) {
+        if (scene.index === activeSceneIndex) {
             syncControlsFromScene();
             setStatus('Mapa pronto para edição.');
         }
@@ -276,34 +278,34 @@ function createScene(index) {
     scene.map.on('move', () => { updateSceneAnnotation(scene); redrawDrawings(scene); });
     scene.map.on('moveend', () => {
         updateSceneAnnotation(scene);
-        if (index === activeSceneIndex) {
+        if (scene.index === activeSceneIndex) {
             syncCoordinateInputs();
         }
     });
 
     scene.map.on('mousemove', event => {
-        if (shapeMode === index && pendingShapeCenter) {
+        if (shapeMode === scene.index && pendingShapeCenter) {
             scene.previewShape = buildShapeObject(scene, pendingShapeCenter, event.lngLat, true);
             redrawDrawings(scene);
         }
     });
 
     scene.map.on('click', event => {
-        if (index !== activeSceneIndex) {
-            setActiveScene(index);
+        if (scene.index !== activeSceneIndex) {
+            setActiveScene(scene.index);
         }
 
-        if (shapeMode === index) {
+        if (shapeMode === scene.index) {
             handleShapeClick(scene, event.lngLat);
             return;
         }
 
-        if (drawingSceneIndex === index) {
+        if (drawingSceneIndex === scene.index) {
             addDrawingPoint(scene, event.lngLat, event.point);
             return;
         }
 
-        if (labelPlacementSceneIndex === index) {
+        if (labelPlacementSceneIndex === scene.index) {
             addEditorialLabelToActiveScene(event.lngLat);
             return;
         }
@@ -312,7 +314,7 @@ function createScene(index) {
     });
 
     scene.map.on('dblclick', event => {
-        if (drawingSceneIndex === index) {
+        if (drawingSceneIndex === scene.index) {
             event.preventDefault();
             finalizeDrawing(scene);
         }
@@ -328,7 +330,7 @@ function createScene(index) {
         navigator.clipboard.writeText(`${latStr}, ${lngStr}`).catch(() => {});
         setStoryLocation({lng, lat});
         getVisibleScenes().forEach(s => {
-            if (s.index !== index) {
+            if (s.index !== scene.index) {
                 s.map.flyTo({center: [lng, lat], essential: true});
             }
             applyLocatorFocus(s);
@@ -353,19 +355,46 @@ function getVisibleScenes() {
 function refreshSceneSelectorOptions() {
     if (!activeSceneInput) return;
     activeSceneInput.innerHTML = '';
-    scenes.forEach((scene, i) => {
+    // Rótulo segue a ordem VISUAL do mapa na coluna (posição em `blocks`).
+    const mapBlocksInOrder = blocks.filter(b => b.type === 'map');
+    const ordered = scenes
+        .map((scene, i) => ({scene, i, vis: mapBlocksInOrder.findIndex(b => b.scene === scene)}))
+        .sort((a, b) => (a.vis < 0 ? 999 : a.vis) - (b.vis < 0 ? 999 : b.vis));
+    ordered.forEach(({scene, i, vis}) => {
         const opt = document.createElement('option');
         opt.value = String(i);
-        opt.textContent = `Mapa ${i + 1}`;
+        opt.textContent = `Mapa ${vis >= 0 ? vis + 1 : i + 1}`;
         activeSceneInput.append(opt);
     });
     activeSceneInput.value = String(Math.min(activeSceneIndex, scenes.length - 1));
 }
 
-// Habilita/desabilita os botões conforme o limite total de blocos.
+// Habilita/desabilita os botões conforme o limite e a posição do bloco ativo.
 function updateBlockControls() {
     if (addSceneButton) addSceneButton.disabled = blocks.length >= maxScenes;
     if (removeSceneButton) removeSceneButton.disabled = blocks.length <= 1;
+    const activeIdx = getActiveBlockIndex();
+    if (moveUpButton) moveUpButton.disabled = activeIdx <= 0;
+    if (moveDownButton) moveDownButton.disabled = activeIdx < 0 || activeIdx >= blocks.length - 1;
+}
+
+// Move um bloco uma posição para cima (-1) ou para baixo (+1) na coluna.
+function moveBlock(block, dir) {
+    const i = blocks.indexOf(block);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= blocks.length) return;
+    blocks.splice(i, 1);
+    blocks.splice(j, 0, block);
+    activeBlockId = block.id;
+    syncBlocksDom();
+    refreshSceneSelectorOptions();
+    updateBlockControls();
+    setStatus('Bloco reposicionado.');
+}
+
+function moveActiveBlock(dir) {
+    const block = blocks[getActiveBlockIndex()];
+    if (block) moveBlock(block, dir);
 }
 
 // Altura (px) que um bloco ocupa no preview/export.
@@ -402,6 +431,15 @@ function teardownScene(scene) {
     try { scene.locatorMaps.forEach(lm => lm.map && lm.map.remove()); } catch {}
     try { scene.map && scene.map.remove(); } catch {}
     if (scene.sceneEl) scene.sceneEl.remove();
+}
+
+// Mantém scene.index alinhado com a posição no array (chamar após remover/mover
+// cenas). Os blocos referenciam o OBJETO da cena, então não quebram.
+function reindexScenes() {
+    scenes.forEach((scene, i) => {
+        scene.index = i;
+        if (scene.sceneEl) scene.sceneEl.dataset.scene = String(i);
+    });
 }
 
 // Adiciona um novo bloco de mapa ao final, herdando o centro do anterior.
@@ -558,7 +596,7 @@ function createImageBlock(data = {}) {
     };
     placeholder.addEventListener('click', openPicker);
     img.addEventListener('click', openPicker);
-    el.addEventListener('mousedown', () => { activeBlockId = block.id; });
+    el.addEventListener('mousedown', () => { activeBlockId = block.id; updateBlockControls(); });
 
     inner.append(img, placeholder);
     el.append(inner, caption, removeBtn);
@@ -612,13 +650,16 @@ function removeBlock(block) {
 
     if (block.type === 'map') {
         if (scenes.length <= 1) { setStatus('É preciso ter ao menos 1 mapa.'); return; }
-        if (block.scene.index !== scenes.length - 1) {
-            setStatus('Por ora, só o último mapa pode ser removido.');
-            return;
-        }
-        teardownScene(block.scene);
-        scenes.pop();
+        const scene = block.scene;
+        const pos = scenes.indexOf(scene);
+        // Cancela modos de edição (guardam índices de cena) antes de remover.
+        setDrawingMode(null);
+        setShapeMode(null);
+        setLabelPlacementMode(null);
+        teardownScene(scene);
+        scenes.splice(pos, 1);
         blocks.splice(i, 1);
+        reindexScenes(); // mantém scene.index === posição
         if (activeSceneIndex >= scenes.length) activeSceneIndex = scenes.length - 1;
         activeBlockId = null;
         refreshSceneSelectorOptions();
@@ -806,6 +847,7 @@ function setActiveScene(index) {
     syncControlsFromScene();
     renderAnnotationPanel();
     renderDrawingList();
+    updateBlockControls();
 }
 
 function syncControlsFromScene() {
@@ -3358,6 +3400,8 @@ async function initializeApp() {
         });
     }
     if (removeSceneButton) removeSceneButton.addEventListener('click', removeActiveBlock);
+    if (moveUpButton) moveUpButton.addEventListener('click', () => moveActiveBlock(-1));
+    if (moveDownButton) moveDownButton.addEventListener('click', () => moveActiveBlock(1));
     activeSceneInput.addEventListener('change', event => setActiveScene(Number.parseInt(event.target.value, 10) || 0));
     mapHeightInput.addEventListener('input', event => setSceneHeight(event.target.value));
     heightPresetButtons.forEach(button => {
