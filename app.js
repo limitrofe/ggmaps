@@ -649,7 +649,18 @@ function createImageBlock(data = {}) {
         applyCaptionStyle();
     });
     opacityWrap.append(opacityIcon, opacity);
-    controls.append(fitBtn, opacityWrap);
+
+    const annotationBtn = document.createElement('button');
+    annotationBtn.type = 'button';
+    annotationBtn.className = 'image-scene__annotate';
+    annotationBtn.textContent = '+ Anotação';
+    annotationBtn.title = 'Adicionar texto/ícone sobre a imagem';
+    annotationBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        addImageAnnotation(block);
+    });
+
+    controls.append(fitBtn, opacityWrap, annotationBtn);
 
     // Alça inferior para ajustar a altura do bloco.
     const heightHandle = document.createElement('div');
@@ -690,8 +701,86 @@ function createImageBlock(data = {}) {
     block.imgEl = img;
     block.placeholderEl = placeholder;
     block.captionEl = caption;
+    // Recria as anotações salvas (texto/ícone) sobre a imagem.
+    block.annotations.forEach(ann => el.append(createImageAnnotationEl(block, ann)));
     mapsStack.append(el);
     return block;
+}
+
+// Cria o DOM de uma anotação (ícone + texto) sobre um bloco de imagem.
+// Posição em % do bloco; arrastável; ícone cicla dot/square/triangle/none.
+function createImageAnnotationEl(block, ann) {
+    const node = document.createElement('div');
+    node.className = 'image-annotation';
+    node.style.left = `${ann.x}%`;
+    node.style.top = `${ann.y}%`;
+
+    const symbol = document.createElement('button');
+    symbol.type = 'button';
+    symbol.className = 'image-annotation__symbol';
+    symbol.title = 'Trocar ícone';
+    const applySymbol = () => {
+        symbol.dataset.symbol = ann.symbol;
+        symbol.style.display = ann.symbol === 'none' ? 'none' : '';
+    };
+    const order = ['dot', 'square', 'triangle', 'none'];
+    symbol.addEventListener('click', event => {
+        event.stopPropagation();
+        ann.symbol = order[(order.indexOf(ann.symbol) + 1) % order.length];
+        applySymbol();
+    });
+    applySymbol();
+
+    const text = document.createElement('input');
+    text.type = 'text';
+    text.className = 'image-annotation__text';
+    text.placeholder = 'Texto';
+    text.value = ann.text;
+    text.addEventListener('input', () => { ann.text = text.value; });
+    text.addEventListener('pointerdown', event => event.stopPropagation()); // editar sem arrastar
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'image-annotation__remove';
+    remove.textContent = '×';
+    remove.title = 'Remover anotação';
+    remove.addEventListener('click', event => {
+        event.stopPropagation();
+        block.annotations = block.annotations.filter(a => a.id !== ann.id);
+        node.remove();
+    });
+
+    // Arraste pela área da anotação (menos o campo de texto).
+    node.addEventListener('pointerdown', event => {
+        if (event.target === text) return;
+        event.preventDefault();
+        activeBlockId = block.id;
+        const rect = block.el.getBoundingClientRect();
+        const move = ev => {
+            ann.x = Math.max(0, Math.min(96, ((ev.clientX - rect.left) / rect.width) * 100));
+            ann.y = Math.max(0, Math.min(94, ((ev.clientY - rect.top) / rect.height) * 100));
+            node.style.left = `${ann.x}%`;
+            node.style.top = `${ann.y}%`;
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+
+    node.append(symbol, text, remove);
+    return node;
+}
+
+// Adiciona uma nova anotação ao centro do bloco de imagem.
+function addImageAnnotation(block) {
+    const ann = {id: `imgann-${annotationIdCounter++}`, x: 45, y: 45, text: '', symbol: 'dot'};
+    block.annotations.push(ann);
+    block.el.append(createImageAnnotationEl(block, ann));
+    activeBlockId = block.id;
+    setStatus('Anotação adicionada. Arraste para posicionar.');
 }
 
 // Adiciona um bloco de imagem logo após o bloco ativo (permite intercalar
@@ -2549,7 +2638,7 @@ function drawImageBlock(ctx, block, y, h) {
         // Mantém a pílula dentro do bloco.
         px = Math.max(0, Math.min(outputWidth - pillW, px));
         py = Math.max(y, Math.min(y + h - pillH, py));
-        ctx.fillStyle = hexToRgba(block.captionBg || '#000000', 0.6);
+        ctx.fillStyle = hexToRgba(block.captionBg || '#000000', block.captionOpacity);
         if (ctx.roundRect) {
             ctx.beginPath();
             ctx.roundRect(px, py, pillW, pillH, 6);
@@ -2560,6 +2649,54 @@ function drawImageBlock(ctx, block, y, h) {
         ctx.fillStyle = '#ffffff';
         lines.forEach((line, i) => ctx.fillText(line, px + padX, py + padY + i * lineH));
     }
+
+    // Anotações (ícone + texto) ancoradas por % do bloco.
+    (block.annotations || []).forEach(ann => {
+        const baseX = (ann.x / 100) * outputWidth;
+        const baseY = y + (ann.y / 100) * h;
+        const pillH = 26;
+        const s = 16;
+        let cursorX = baseX;
+        if (ann.symbol && ann.symbol !== 'none') {
+            ctx.fillStyle = red;
+            const symY = baseY + (pillH - s) / 2;
+            if (ann.symbol === 'dot') {
+                ctx.beginPath();
+                ctx.arc(baseX + s / 2, symY + s / 2, s / 2, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (ann.symbol === 'square') {
+                ctx.fillRect(baseX, symY, s, s);
+            } else if (ann.symbol === 'triangle') {
+                ctx.beginPath();
+                ctx.moveTo(baseX + s / 2, symY);
+                ctx.lineTo(baseX + s, symY + s);
+                ctx.lineTo(baseX, symY + s);
+                ctx.closePath();
+                ctx.fill();
+            }
+            cursorX = baseX + s + 6;
+        }
+        const txt = normalizeText(ann.text);
+        if (txt) {
+            ctx.font = '16px "Open Sans", Arial, Helvetica, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            const padX = 8;
+            const tw = ctx.measureText(txt).width;
+            const pillW = tw + padX * 2;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(cursorX, baseY, pillW, pillH, 5);
+                ctx.fill();
+            } else {
+                ctx.fillRect(cursorX, baseY, pillW, pillH);
+            }
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(txt, cursorX + padX, baseY + pillH / 2 + 1);
+            ctx.textBaseline = 'top';
+        }
+    });
 
     ctx.restore();
 }

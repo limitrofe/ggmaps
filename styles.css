@@ -776,6 +776,90 @@ select:disabled {
     background: rgba(255, 255, 255, 0.7);
 }
 
+.image-scene__annotate {
+    border: none;
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.image-scene__annotate:hover {
+    background: rgba(255, 255, 255, 0.32);
+}
+
+/* Anotações (ícone + texto) sobre a imagem */
+.image-annotation {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    z-index: 6;
+    cursor: move;
+    touch-action: none;
+}
+
+.image-annotation__symbol {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    background: var(--accent);
+}
+
+.image-annotation__symbol[data-symbol="dot"] {
+    border-radius: 50%;
+}
+
+.image-annotation__symbol[data-symbol="square"] {
+    border-radius: 2px;
+}
+
+.image-annotation__symbol[data-symbol="triangle"] {
+    background: transparent;
+    width: 0;
+    height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 16px solid var(--accent);
+}
+
+.image-annotation__text {
+    border: none;
+    border-radius: 5px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #ffffff;
+    font-size: 15px;
+    font-family: "Open Sans", Arial, Helvetica, sans-serif;
+    outline: none;
+    min-width: 60px;
+}
+
+.image-annotation__text::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.image-annotation__remove {
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #ffffff;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.image-annotation__remove:hover {
+    background: var(--accent);
+}
+
 .image-scene__remove {
     position: absolute;
     top: 8px;
