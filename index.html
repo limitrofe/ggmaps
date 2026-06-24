@@ -331,6 +331,30 @@
                                     <input id="selected-label-lng-input" type="number" step="any" />
                                 </label>
                             </div>
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Tarja atrás do texto</span>
+                                    <select id="selected-label-bg-input">
+                                        <option value="off">Sem tarja</option>
+                                        <option value="on">Com tarja</option>
+                                    </select>
+                                </label>
+                                <label class="field">
+                                    <span>Cor da tarja</span>
+                                    <input id="selected-label-bg-color-input" type="color" value="#000000" />
+                                </label>
+                            </div>
+                            <div class="coordinate-grid">
+                                <label class="field">
+                                    <span>Opacidade da tarja (%)</span>
+                                    <input id="selected-label-bg-opacity-input" type="number" min="0" max="100" value="60" />
+                                </label>
+                                <label class="field">
+                                    <span>Largura do texto (px)</span>
+                                    <input id="selected-label-width-input" type="number" min="80" max="600" value="260" />
+                                </label>
+                            </div>
+                            <p class="smart-hint">Dê <strong>duplo clique</strong> no texto sobre o mapa para editá-lo direto ali.</p>
                         </section>
                     </div>
                 </details>

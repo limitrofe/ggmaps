@@ -68,6 +68,10 @@ const selectedSymbolInput = document.getElementById('selected-symbol-input');
 const selectedLabelPositionInput = document.getElementById('selected-label-position-input');
 const selectedLabelLatInput = document.getElementById('selected-label-lat-input');
 const selectedLabelLngInput = document.getElementById('selected-label-lng-input');
+const selectedLabelBgInput = document.getElementById('selected-label-bg-input');
+const selectedLabelBgColorInput = document.getElementById('selected-label-bg-color-input');
+const selectedLabelBgOpacityInput = document.getElementById('selected-label-bg-opacity-input');
+const selectedLabelWidthInput = document.getElementById('selected-label-width-input');
 const locatorModeInput = document.getElementById('locator-mode-input');
 const locatorQueryInput = document.getElementById('locator-query-input');
 const locatorSearchButton = document.getElementById('locator-search-button');
@@ -1075,6 +1079,10 @@ function renderAnnotationPanel() {
     selectedLabelPositionInput.value = selected.textPosition || 'right';
     selectedLabelLatInput.value = Number(selected.lat).toFixed(6);
     selectedLabelLngInput.value = Number(selected.lng).toFixed(6);
+    if (selectedLabelBgInput) selectedLabelBgInput.value = selected.bg ? 'on' : 'off';
+    if (selectedLabelBgColorInput) selectedLabelBgColorInput.value = selected.bgColor || '#000000';
+    if (selectedLabelBgOpacityInput) selectedLabelBgOpacityInput.value = String(Math.round((selected.bgOpacity ?? 0.6) * 100));
+    if (selectedLabelWidthInput) selectedLabelWidthInput.value = String(selected.width || 260);
 }
 
 function syncSelectedAnnotation(update) {
@@ -2187,6 +2195,8 @@ function updateEditorialLabelOffset(scene, editorialLabel, deltaX, deltaY) {
 }
 
 function startEditorialTextDrag(event, scene, editorialLabel) {
+    // Não arrastar enquanto o texto está em edição inline (duplo clique).
+    if (event.currentTarget.isContentEditable) return;
     event.preventDefault();
     event.stopPropagation();
 
@@ -2665,7 +2675,36 @@ function updateSceneAnnotation(scene) {
             text.style.left = `${editorialLabel.offsetX}px`;
             text.style.top = `${editorialLabel.offsetY}px`;
             text.style.textAlign = getTextAlignForPosition(editorialLabel.textPosition);
+            text.style.maxWidth = `${editorialLabel.width || 260}px`;
+            if (editorialLabel.bg) {
+                text.style.background = hexToRgba(editorialLabel.bgColor || '#000000', editorialLabel.bgOpacity ?? 0.6);
+                text.style.color = '#ffffff';
+                text.style.padding = '2px 6px';
+                text.style.borderRadius = '4px';
+            }
             text.addEventListener('pointerdown', event => startEditorialTextDrag(event, scene, editorialLabel));
+            // Duplo clique edita o texto direto no mapa.
+            text.addEventListener('dblclick', event => {
+                event.stopPropagation();
+                selectedAnnotationId = editorialLabel.id;
+                text.contentEditable = 'true';
+                text.focus();
+                const range = document.createRange();
+                range.selectNodeContents(text);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            });
+            text.addEventListener('keydown', event => {
+                if (event.key === 'Enter') { event.preventDefault(); text.blur(); }
+            });
+            text.addEventListener('blur', () => {
+                if (text.contentEditable !== 'true') return;
+                text.contentEditable = 'false';
+                editorialLabel.text = normalizeText(text.textContent);
+                renderAnnotationPanel();
+                updateSceneAnnotation(scene);
+            });
             label.append(text);
         }
 
@@ -3007,7 +3046,7 @@ function drawEditorialLabels(ctx, scene, offsetY) {
         const labelLeft = editorialLabel.textPosition === 'left' || x + editorialLabel.offsetX > outputWidth - 220;
         const labelX = x + editorialLabel.offsetX;
         const labelY = y + editorialLabel.offsetY;
-        const labelLines = measureBlock(ctx, editorialLabel.text, editorialLabelFont, 23, 260).lines;
+        const labelLines = measureBlock(ctx, editorialLabel.text, editorialLabelFont, 23, editorialLabel.width || 260).lines;
 
         ctx.save();
         if (editorialLabel.symbol === 'image' && editorialLabel.imageData) {
@@ -3026,15 +3065,40 @@ function drawEditorialLabels(ctx, scene, offsetY) {
         if (normalizeText(editorialLabel.text)) {
             ctx.font = editorialLabelFont;
             ctx.textBaseline = 'top';
-            ctx.textAlign = getTextAlignForPosition(editorialLabel.textPosition) || (labelLeft ? 'right' : 'left');
-            labelLines.forEach((line, index) => {
-                const lineY = labelY + (index * 23);
-                ctx.lineWidth = 4;
-                ctx.strokeStyle = '#ffffff';
-                ctx.strokeText(line, labelX, lineY);
-                ctx.fillStyle = '#2f3033';
-                ctx.fillText(line, labelX, lineY);
-            });
+            const align = getTextAlignForPosition(editorialLabel.textPosition) || (labelLeft ? 'right' : 'left');
+            ctx.textAlign = align;
+            const lineH = 23;
+
+            if (editorialLabel.bg) {
+                const padX = 6;
+                const padY = 2;
+                const maxW = Math.max(...labelLines.map(line => ctx.measureText(line).width), 0);
+                const totalH = labelLines.length * lineH;
+                let rx = labelX;
+                if (align === 'right') rx = labelX - maxW;
+                else if (align === 'center') rx = labelX - maxW / 2;
+                ctx.fillStyle = hexToRgba(editorialLabel.bgColor || '#000000', editorialLabel.bgOpacity ?? 0.6);
+                const bw = maxW + padX * 2;
+                const bh = totalH + padY * 2;
+                if (ctx.roundRect) {
+                    ctx.beginPath();
+                    ctx.roundRect(rx - padX, labelY - padY, bw, bh, 4);
+                    ctx.fill();
+                } else {
+                    ctx.fillRect(rx - padX, labelY - padY, bw, bh);
+                }
+                ctx.fillStyle = '#ffffff';
+                labelLines.forEach((line, index) => ctx.fillText(line, labelX, labelY + index * lineH));
+            } else {
+                labelLines.forEach((line, index) => {
+                    const lineY = labelY + (index * lineH);
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.strokeText(line, labelX, lineY);
+                    ctx.fillStyle = '#2f3033';
+                    ctx.fillText(line, labelX, lineY);
+                });
+            }
         }
         ctx.restore();
     });
@@ -4037,6 +4101,18 @@ async function initializeApp() {
                 annotation.lng = value;
             }
         });
+    });
+    if (selectedLabelBgInput) selectedLabelBgInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => { annotation.bg = event.target.value === 'on'; });
+    });
+    if (selectedLabelBgColorInput) selectedLabelBgColorInput.addEventListener('input', event => {
+        syncSelectedAnnotation(annotation => { annotation.bgColor = event.target.value; });
+    });
+    if (selectedLabelBgOpacityInput) selectedLabelBgOpacityInput.addEventListener('input', event => {
+        syncSelectedAnnotation(annotation => { annotation.bgOpacity = Math.max(0, Math.min(1, (Number(event.target.value) || 0) / 100)); });
+    });
+    if (selectedLabelWidthInput) selectedLabelWidthInput.addEventListener('input', event => {
+        syncSelectedAnnotation(annotation => { annotation.width = Math.max(80, Math.min(600, Number(event.target.value) || 260)); });
     });
     editorialImageInput.addEventListener('change', event => {
         const file = event.target.files?.[0];
