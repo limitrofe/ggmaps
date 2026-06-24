@@ -616,13 +616,14 @@ select:disabled {
 
 .image-scene__caption {
     position: absolute;
-    display: inline-flex;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
-    max-width: 90%;
-    padding: 5px 10px;
+    gap: 4px 6px;
+    padding: 6px 10px;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.55);
+    box-sizing: border-box;
     z-index: 6;
 }
 
@@ -635,13 +636,25 @@ select:disabled {
     touch-action: none;
 }
 
+.image-scene__caption-width {
+    cursor: ew-resize;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 13px;
+    line-height: 1;
+    user-select: none;
+    touch-action: none;
+}
+
 .image-scene__caption-text {
+    flex: 1 1 100%;
     border: none;
     background: transparent;
     color: #ffffff;
     font-size: 15px;
+    line-height: 1.3;
     font-family: "Open Sans", Arial, Helvetica, sans-serif;
-    min-width: 80px;
+    resize: none;
+    overflow: hidden;
     outline: none;
 }
 

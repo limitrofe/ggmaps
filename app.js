@@ -438,7 +438,8 @@ function createImageBlock(data = {}) {
         imageFit: data.imageFit || 'cover',
         caption: data.caption || '',
         captionX: typeof data.captionX === 'number' ? data.captionX : 4,
-        captionY: typeof data.captionY === 'number' ? data.captionY : 86,
+        captionY: typeof data.captionY === 'number' ? data.captionY : 80,
+        captionW: typeof data.captionW === 'number' ? data.captionW : 45,
         captionBg: data.captionBg || '#000000',
         height: data.height || IMAGE_BLOCK_DEFAULT_HEIGHT,
         annotations: Array.isArray(data.annotations) ? clone(data.annotations) : []
@@ -471,12 +472,13 @@ function createImageBlock(data = {}) {
     grip.textContent = '⠿';
     grip.title = 'Arraste para reposicionar';
 
-    const captionText = document.createElement('input');
-    captionText.type = 'text';
+    const captionText = document.createElement('textarea');
     captionText.className = 'image-scene__caption-text';
+    captionText.rows = 1;
     captionText.placeholder = 'Legenda (opcional)';
     captionText.value = block.caption;
-    captionText.addEventListener('input', () => { block.caption = captionText.value; });
+    const autoSize = () => { captionText.style.height = 'auto'; captionText.style.height = `${captionText.scrollHeight}px`; };
+    captionText.addEventListener('input', () => { block.caption = captionText.value; autoSize(); });
 
     const captionColor = document.createElement('input');
     captionColor.type = 'color';
@@ -484,17 +486,43 @@ function createImageBlock(data = {}) {
     captionColor.value = block.captionBg;
     captionColor.title = 'Cor da tarja';
 
+    const widthHandle = document.createElement('span');
+    widthHandle.className = 'image-scene__caption-width';
+    widthHandle.textContent = '⇿';
+    widthHandle.title = 'Arraste para mudar a largura';
+
     const applyCaptionStyle = () => {
         caption.style.left = `${block.captionX}%`;
         caption.style.top = `${block.captionY}%`;
+        caption.style.width = `${block.captionW}%`;
         caption.style.background = hexToRgba(block.captionBg, 0.6);
+        autoSize();
     };
     captionColor.addEventListener('input', () => {
         block.captionBg = captionColor.value;
         applyCaptionStyle();
     });
 
-    caption.append(grip, captionText, captionColor);
+    // Arraste da borda direita para ajustar a largura (em % do bloco).
+    widthHandle.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        activeBlockId = block.id;
+        const rect = el.getBoundingClientRect();
+        const move = ev => {
+            const w = ((ev.clientX - rect.left) / rect.width) * 100 - block.captionX;
+            block.captionW = Math.max(12, Math.min(95, w));
+            applyCaptionStyle();
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+
+    caption.append(grip, captionColor, widthHandle, captionText);
 
     // Arraste da legenda pelo "grip" (posição relativa em % do bloco).
     grip.addEventListener('pointerdown', event => {
@@ -2331,15 +2359,17 @@ function drawImageBlock(ctx, block, y, h) {
     }
 
     const caption = normalizeText(block.caption);
-    if (caption) {
+    if (block.caption && caption) {
         ctx.font = '18px "Open Sans", Arial, Helvetica, sans-serif';
-        ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
         const padX = 10;
         const padY = 6;
-        const textW = ctx.measureText(caption).width;
-        const pillW = textW + padX * 2;
-        const pillH = 18 + padY * 2;
+        const lineH = 24;
+        const pillW = Math.max(60, (block.captionW / 100) * outputWidth);
+        const maxTextW = pillW - padX * 2;
+        const lines = wrapText(ctx, block.caption, maxTextW);
+        const pillH = lines.length * lineH + padY * 2;
         let px = (block.captionX / 100) * outputWidth;
         let py = y + (block.captionY / 100) * h;
         // Mantém a pílula dentro do bloco.
@@ -2354,8 +2384,7 @@ function drawImageBlock(ctx, block, y, h) {
             ctx.fillRect(px, py, pillW, pillH);
         }
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(caption, px + padX, py + pillH / 2 + 1);
-        ctx.textBaseline = 'top';
+        lines.forEach((line, i) => ctx.fillText(line, px + padX, py + padY + i * lineH));
     }
 
     ctx.restore();
@@ -3115,6 +3144,7 @@ function serializeState() {
                 caption: block.caption,
                 captionX: block.captionX,
                 captionY: block.captionY,
+                captionW: block.captionW,
                 captionBg: block.captionBg,
                 height: block.height,
                 annotations: clone(block.annotations || [])
