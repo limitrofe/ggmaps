@@ -224,35 +224,10 @@ function createScene(index) {
         preserveDrawingBuffer: true
     });
 
-    locatorMaps.forEach((locatorMap, mapIndex) => {
-        locatorMap.map = new mapboxgl.Map({
-            container: locatorMap.miniMapEl,
-            style: mapboxStyle,
-            center: mapIndex === 0 ? [-53.2, -14.2] : [-47.8825, -15.7942],
-            zoom: [2.5, 5.0, 9.0][mapIndex] ?? 5.0,
-            attributionControl: false,
-            interactive: false,
-            preserveDrawingBuffer: true
-        });
-
-        locatorMap.map.on('load', () => {
-            hideLocatorLabels(locatorMap.map);
-            updateSceneLocator(scene);
-            if (mapIndex === 0) {
-                const bounds = getPresetBounds(scene.locator.query);
-                if (bounds) {
-                    locatorMap.map.fitBounds(bounds, {padding: 1, duration: 0});
-                } else {
-                    locatorMap.map.jumpTo({center: locatorMap.center, zoom: locatorMap.zoom});
-                }
-            } else {
-                locatorMap.map.jumpTo({center: locatorMap.center, zoom: locatorMap.zoom});
-            }
-        });
-        locatorMap.map.on('styledata', () => hideLocatorLabels(locatorMap.map));
-        locatorMap.map.on('move', () => updateSceneLocatorFocus(scene));
-        locatorMap.map.on('moveend', () => updateSceneLocatorFocus(scene));
-    });
+    // Os mini-mapas do localizador são criados sob demanda (ensureLocatorMaps)
+    // para não estourar o limite de contextos WebGL do navegador com muitos
+    // blocos de mapa. Cada cena passa a usar 1 contexto (o mapa principal)
+    // enquanto o localizador estiver desligado.
 
     setupLocatorDrag(scene);
 
@@ -911,7 +886,7 @@ function refreshSceneVisibility() {
         if (isVisible) {
             window.requestAnimationFrame(() => {
                 scene.map.resize();
-                scene.locatorMaps.forEach(locatorMap => locatorMap.map.resize());
+                scene.locatorMaps.forEach(locatorMap => locatorMap.map && locatorMap.map.resize());
                 updateSceneAnnotation(scene);
                 updateSceneLocator(scene);
                 applyMapLabelVisibility(scene);
@@ -2097,6 +2072,50 @@ function setLocatorPosition(scene, x, y) {
     scene.locatorEl.style.transform = `translate(${scene.locator.x}px, ${scene.locator.y}px)`;
 }
 
+// Cria (sob demanda) os mini-mapas Mapbox do localizador desta cena.
+function ensureLocatorMaps(scene) {
+    scene.locatorMaps.forEach((locatorMap, mapIndex) => {
+        if (locatorMap.map) return;
+        locatorMap.map = new mapboxgl.Map({
+            container: locatorMap.miniMapEl,
+            style: mapboxStyle,
+            center: mapIndex === 0 ? [-53.2, -14.2] : [-47.8825, -15.7942],
+            zoom: [2.5, 5.0, 9.0][mapIndex] ?? 5.0,
+            attributionControl: false,
+            interactive: false,
+            preserveDrawingBuffer: true
+        });
+
+        locatorMap.map.on('load', () => {
+            hideLocatorLabels(locatorMap.map);
+            updateSceneLocator(scene);
+            if (mapIndex === 0) {
+                const bounds = getPresetBounds(scene.locator.query);
+                if (bounds) {
+                    locatorMap.map.fitBounds(bounds, {padding: 1, duration: 0});
+                } else {
+                    locatorMap.map.jumpTo({center: locatorMap.center, zoom: locatorMap.zoom});
+                }
+            } else {
+                locatorMap.map.jumpTo({center: locatorMap.center, zoom: locatorMap.zoom});
+            }
+        });
+        locatorMap.map.on('styledata', () => hideLocatorLabels(locatorMap.map));
+        locatorMap.map.on('move', () => updateSceneLocatorFocus(scene));
+        locatorMap.map.on('moveend', () => updateSceneLocatorFocus(scene));
+    });
+}
+
+// Libera os contextos WebGL dos mini-mapas (quando o localizador é desligado).
+function teardownLocatorMaps(scene) {
+    scene.locatorMaps.forEach(locatorMap => {
+        if (locatorMap.map) {
+            try { locatorMap.map.remove(); } catch {}
+            locatorMap.map = null;
+        }
+    });
+}
+
 function updateSceneLocator(scene) {
     const enabled = scene.locator.mode !== 'none';
 
@@ -2105,11 +2124,13 @@ function updateSceneLocator(scene) {
     scene.locatorMaps[2].wrapEl.hidden = scene.locator.mode !== 'three';
 
     if (!enabled) {
+        teardownLocatorMaps(scene); // libera contextos WebGL
         return;
     }
 
+    ensureLocatorMaps(scene);
     setLocatorPosition(scene, scene.locator.x, scene.locator.y);
-    scene.locatorMaps.forEach(locatorMap => locatorMap.map.resize());
+    scene.locatorMaps.forEach(locatorMap => locatorMap.map && locatorMap.map.resize());
     updateSceneLocatorFocus(scene);
 }
 
@@ -2157,7 +2178,7 @@ function applyLocatorLevels(scene, feature) {
         if (i >= levels.length) return;
         locatorMap.center = levels[i].center;
         locatorMap.zoom = levels[i].zoom;
-        locatorMap.map.easeTo({center: levels[i].center, zoom: levels[i].zoom, duration: 300});
+        if (locatorMap.map) locatorMap.map.easeTo({center: levels[i].center, zoom: levels[i].zoom, duration: 300});
     });
 }
 
@@ -2170,7 +2191,7 @@ function applyLocatorFocus(scene) {
         const zoom = detailZooms[i] ?? 9.5;
         locatorMap.center = [focus.lng, focus.lat];
         locatorMap.zoom = zoom;
-        locatorMap.map.easeTo({center: [focus.lng, focus.lat], zoom, duration: 0});
+        if (locatorMap.map) locatorMap.map.easeTo({center: [focus.lng, focus.lat], zoom, duration: 0});
     });
     updateSceneLocator(scene);
 }
@@ -2226,6 +2247,8 @@ async function applyLocatorArea() {
         scene.locator.mode = 'three';
         locatorModeInput.value = 'three';
     }
+
+    ensureLocatorMaps(scene);
 
     if (!query) {
         setStatus('Digite uma área para o localizador.');
@@ -2340,7 +2363,7 @@ function updateSceneAnnotation(scene) {
 }
 
 function waitForMapIdle(scene) {
-    const maps = [scene.map, ...scene.locatorMaps.map(locatorMap => locatorMap.map)];
+    const maps = [scene.map, ...scene.locatorMaps.map(locatorMap => locatorMap.map)].filter(Boolean);
     const waits = maps.map(map => {
         if (map.loaded()) {
             return Promise.resolve();
