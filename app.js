@@ -421,6 +421,14 @@ function addSceneBlock() {
     setStatus(`Mapa ${scenes.length} adicionado.`);
 }
 
+// Converte um hex (#rrggbb) em rgba() com a opacidade dada.
+function hexToRgba(hex, alpha = 1) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return `rgba(0, 0, 0, ${alpha})`;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
 // Cria o objeto + DOM de um bloco de imagem (sem dados ainda).
 function createImageBlock(data = {}) {
     const block = {
@@ -429,6 +437,9 @@ function createImageBlock(data = {}) {
         imageData: data.imageData || '',
         imageFit: data.imageFit || 'cover',
         caption: data.caption || '',
+        captionX: typeof data.captionX === 'number' ? data.captionX : 4,
+        captionY: typeof data.captionY === 'number' ? data.captionY : 86,
+        captionBg: data.captionBg || '#000000',
         height: data.height || IMAGE_BLOCK_DEFAULT_HEIGHT,
         annotations: Array.isArray(data.annotations) ? clone(data.annotations) : []
     };
@@ -451,12 +462,59 @@ function createImageBlock(data = {}) {
     placeholder.textContent = 'Clique para escolher uma imagem';
     placeholder.hidden = Boolean(block.imageData);
 
-    const caption = document.createElement('input');
-    caption.type = 'text';
+    // Legenda em "pílula" arrastável, com tarja de cor configurável.
+    const caption = document.createElement('div');
     caption.className = 'image-scene__caption';
-    caption.placeholder = 'Legenda (opcional)';
-    caption.value = block.caption;
-    caption.addEventListener('input', () => { block.caption = caption.value; });
+
+    const grip = document.createElement('span');
+    grip.className = 'image-scene__caption-grip';
+    grip.textContent = '⠿';
+    grip.title = 'Arraste para reposicionar';
+
+    const captionText = document.createElement('input');
+    captionText.type = 'text';
+    captionText.className = 'image-scene__caption-text';
+    captionText.placeholder = 'Legenda (opcional)';
+    captionText.value = block.caption;
+    captionText.addEventListener('input', () => { block.caption = captionText.value; });
+
+    const captionColor = document.createElement('input');
+    captionColor.type = 'color';
+    captionColor.className = 'image-scene__caption-color';
+    captionColor.value = block.captionBg;
+    captionColor.title = 'Cor da tarja';
+
+    const applyCaptionStyle = () => {
+        caption.style.left = `${block.captionX}%`;
+        caption.style.top = `${block.captionY}%`;
+        caption.style.background = hexToRgba(block.captionBg, 0.6);
+    };
+    captionColor.addEventListener('input', () => {
+        block.captionBg = captionColor.value;
+        applyCaptionStyle();
+    });
+
+    caption.append(grip, captionText, captionColor);
+
+    // Arraste da legenda pelo "grip" (posição relativa em % do bloco).
+    grip.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        activeBlockId = block.id;
+        const rect = el.getBoundingClientRect();
+        const move = ev => {
+            const x = ((ev.clientX - rect.left) / rect.width) * 100;
+            const y = ((ev.clientY - rect.top) / rect.height) * 100;
+            block.captionX = Math.max(0, Math.min(92, x));
+            block.captionY = Math.max(0, Math.min(92, y));
+            applyCaptionStyle();
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
@@ -476,6 +534,7 @@ function createImageBlock(data = {}) {
 
     inner.append(img, placeholder);
     el.append(inner, caption, removeBtn);
+    applyCaptionStyle();
 
     block.el = el;
     block.imgEl = img;
@@ -2273,14 +2332,29 @@ function drawImageBlock(ctx, block, y, h) {
 
     const caption = normalizeText(block.caption);
     if (caption) {
-        const barH = 32;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.fillRect(0, y + h - barH, outputWidth, barH);
-        ctx.fillStyle = '#ffffff';
         ctx.font = '18px "Open Sans", Arial, Helvetica, sans-serif';
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
-        ctx.fillText(caption, textPaddingX, y + h - (barH / 2) + 1);
+        const padX = 10;
+        const padY = 6;
+        const textW = ctx.measureText(caption).width;
+        const pillW = textW + padX * 2;
+        const pillH = 18 + padY * 2;
+        let px = (block.captionX / 100) * outputWidth;
+        let py = y + (block.captionY / 100) * h;
+        // Mantém a pílula dentro do bloco.
+        px = Math.max(0, Math.min(outputWidth - pillW, px));
+        py = Math.max(y, Math.min(y + h - pillH, py));
+        ctx.fillStyle = hexToRgba(block.captionBg || '#000000', 0.6);
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(px, py, pillW, pillH, 6);
+            ctx.fill();
+        } else {
+            ctx.fillRect(px, py, pillW, pillH);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(caption, px + padX, py + pillH / 2 + 1);
         ctx.textBaseline = 'top';
     }
 
@@ -3039,6 +3113,9 @@ function serializeState() {
                 imageData: block.imageData,
                 imageFit: block.imageFit,
                 caption: block.caption,
+                captionX: block.captionX,
+                captionY: block.captionY,
+                captionBg: block.captionBg,
                 height: block.height,
                 annotations: clone(block.annotations || [])
             })
