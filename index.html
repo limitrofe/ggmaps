@@ -157,8 +157,14 @@
                     <p id="preview-source" class="source-line">Fonte: Mapbox</p>
                 </div>
                 <div class="block-controls" aria-label="Adicionar ou remover blocos">
-                    <button id="add-scene-button" class="block-add-button" type="button" title="Adicionar mapa">+</button>
-                    <button id="remove-scene-button" class="block-remove-button" type="button" title="Remover último mapa">−</button>
+                    <div class="block-add-wrap">
+                        <button id="add-scene-button" class="block-add-button" type="button" title="Adicionar bloco">+</button>
+                        <div id="add-block-menu" class="block-add-menu" hidden>
+                            <button type="button" data-add="map">Mapa</button>
+                            <button type="button" data-add="image">Imagem</button>
+                        </div>
+                    </div>
+                    <button id="remove-scene-button" class="block-remove-button" type="button" title="Remover bloco ativo">−</button>
                 </div>
             </section>
 

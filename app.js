@@ -18,6 +18,7 @@ const sourceInput = document.getElementById('source-input');
 const activeSceneInput = document.getElementById('active-scene-input');
 const addSceneButton = document.getElementById('add-scene-button');
 const removeSceneButton = document.getElementById('remove-scene-button');
+const addBlockMenu = document.getElementById('add-block-menu');
 const searchInput = document.getElementById('search-input');
 const searchButton = document.getElementById('search-button');
 const searchResults = document.getElementById('search-results');
@@ -82,6 +83,16 @@ const exportFrame = document.getElementById('export-frame');
 const mapsStack = document.getElementById('maps-stack');
 
 const scenes = [];
+// Ordenação da coluna central: lista de blocos que podem ser mapa ou imagem.
+// Blocos de mapa referenciam um objeto de `scenes`; blocos de imagem são
+// independentes (não mexem em scene.index, então podem ser movidos/removidos
+// livremente, inclusive entre mapas).
+const blocks = [];
+let blockIdCounter = 1;
+let activeBlockId = null;
+let pendingImageBlock = null;
+let imageBlockFileInput = null;
+const IMAGE_BLOCK_DEFAULT_HEIGHT = 360;
 let scenesInitialized = false;
 let activeSceneIndex = 0;
 let storyLocation = {lng: -47.8825, lat: -15.7942};
@@ -351,10 +362,39 @@ function refreshSceneSelectorOptions() {
     activeSceneInput.value = String(Math.min(activeSceneIndex, scenes.length - 1));
 }
 
-// Habilita/desabilita os botões de adicionar/remover conforme o limite.
+// Habilita/desabilita os botões conforme o limite total de blocos.
 function updateBlockControls() {
-    if (addSceneButton) addSceneButton.disabled = scenes.length >= maxScenes;
-    if (removeSceneButton) removeSceneButton.disabled = scenes.length <= 1;
+    if (addSceneButton) addSceneButton.disabled = blocks.length >= maxScenes;
+    if (removeSceneButton) removeSceneButton.disabled = blocks.length <= 1;
+}
+
+// Altura (px) que um bloco ocupa no preview/export.
+function blockHeight(block) {
+    return block.type === 'image' ? (block.height || IMAGE_BLOCK_DEFAULT_HEIGHT) : block.scene.height;
+}
+
+// Elemento DOM raiz de um bloco.
+function blockEl(block) {
+    return block.type === 'image' ? block.el : block.scene.sceneEl;
+}
+
+// Reordena os filhos de #maps-stack para refletir a ordem de `blocks`.
+function syncBlocksDom() {
+    blocks.forEach(block => {
+        const el = blockEl(block);
+        if (el) mapsStack.append(el); // append move o nó existente para o fim, na ordem
+    });
+}
+
+// Índice do bloco ativo (imagem selecionada ou bloco do mapa ativo).
+function getActiveBlockIndex() {
+    if (activeBlockId != null) {
+        const i = blocks.findIndex(b => b.id === activeBlockId);
+        if (i >= 0) return i;
+    }
+    const scene = scenes[activeSceneIndex];
+    const i = blocks.findIndex(b => b.type === 'map' && b.scene === scene);
+    return i >= 0 ? i : blocks.length - 1;
 }
 
 // Remove os mapas Mapbox e o DOM de uma cena (usado ao remover bloco).
@@ -366,12 +406,14 @@ function teardownScene(scene) {
 
 // Adiciona um novo bloco de mapa ao final, herdando o centro do anterior.
 function addSceneBlock() {
-    if (scenes.length >= maxScenes) {
+    if (blocks.length >= maxScenes) {
         setStatus(`Limite de ${maxScenes} blocos atingido.`);
         return;
     }
     const scene = createScene(scenes.length);
     scenes.push(scene);
+    blocks.push({id: blockIdCounter++, type: 'map', scene});
+    syncBlocksDom();
     refreshSceneSelectorOptions();
     refreshSceneVisibility();
     setActiveScene(scenes.length - 1);
@@ -379,24 +421,139 @@ function addSceneBlock() {
     setStatus(`Mapa ${scenes.length} adicionado.`);
 }
 
-// Remove o último bloco (mantém ao menos 1). Desenhos/formas são globais
-// (coordenadas geográficas) e não precisam de limpeza.
-function removeSceneBlock() {
-    if (scenes.length <= 1) {
-        setStatus('É preciso ter ao menos 1 mapa.');
-        return;
-    }
-    const scene = scenes.pop();
-    teardownScene(scene);
-    if (activeSceneIndex >= scenes.length) activeSceneIndex = scenes.length - 1;
-    refreshSceneSelectorOptions();
-    refreshSceneVisibility();
-    setActiveScene(activeSceneIndex);
-    updateBlockControls();
-    setStatus(`Mapa removido. ${scenes.length} bloco(s) restante(s).`);
+// Cria o objeto + DOM de um bloco de imagem (sem dados ainda).
+function createImageBlock(data = {}) {
+    const block = {
+        id: blockIdCounter++,
+        type: 'image',
+        imageData: data.imageData || '',
+        imageFit: data.imageFit || 'cover',
+        caption: data.caption || '',
+        height: data.height || IMAGE_BLOCK_DEFAULT_HEIGHT,
+        annotations: Array.isArray(data.annotations) ? clone(data.annotations) : []
+    };
+
+    const el = document.createElement('section');
+    el.className = 'image-scene';
+    el.style.height = `${block.height}px`;
+
+    const inner = document.createElement('div');
+    inner.className = 'image-scene__inner';
+
+    const img = document.createElement('img');
+    img.className = 'image-scene__img';
+    img.alt = '';
+    if (block.imageData) img.src = block.imageData; else img.hidden = true;
+
+    const placeholder = document.createElement('button');
+    placeholder.type = 'button';
+    placeholder.className = 'image-scene__placeholder';
+    placeholder.textContent = 'Clique para escolher uma imagem';
+    placeholder.hidden = Boolean(block.imageData);
+
+    const caption = document.createElement('input');
+    caption.type = 'text';
+    caption.className = 'image-scene__caption';
+    caption.placeholder = 'Legenda (opcional)';
+    caption.value = block.caption;
+    caption.addEventListener('input', () => { block.caption = caption.value; });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'image-scene__remove';
+    removeBtn.title = 'Remover imagem';
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', event => { event.stopPropagation(); removeBlock(block); });
+
+    const openPicker = () => {
+        pendingImageBlock = block;
+        activeBlockId = block.id;
+        if (imageBlockFileInput) { imageBlockFileInput.value = ''; imageBlockFileInput.click(); }
+    };
+    placeholder.addEventListener('click', openPicker);
+    img.addEventListener('click', openPicker);
+    el.addEventListener('mousedown', () => { activeBlockId = block.id; });
+
+    inner.append(img, placeholder);
+    el.append(inner, caption, removeBtn);
+
+    block.el = el;
+    block.imgEl = img;
+    block.placeholderEl = placeholder;
+    block.captionEl = caption;
+    mapsStack.append(el);
+    return block;
 }
 
-// Garante que o array tenha exatamente n blocos (usado ao carregar peças).
+// Adiciona um bloco de imagem logo após o bloco ativo (permite intercalar
+// imagem entre dois mapas) e abre o seletor de arquivo.
+function addImageBlock() {
+    if (blocks.length >= maxScenes) {
+        setStatus(`Limite de ${maxScenes} blocos atingido.`);
+        return;
+    }
+    const block = createImageBlock();
+    const insertAt = getActiveBlockIndex() + 1;
+    blocks.splice(insertAt, 0, block);
+    activeBlockId = block.id;
+    syncBlocksDom();
+    updateBlockControls();
+    setStatus('Bloco de imagem adicionado. Escolha uma imagem.');
+    pendingImageBlock = block;
+    if (imageBlockFileInput) { imageBlockFileInput.value = ''; imageBlockFileInput.click(); }
+}
+
+// Aplica o arquivo escolhido ao bloco de imagem pendente.
+function applyImageFileToBlock(file) {
+    const block = pendingImageBlock;
+    if (!block || !file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        block.imageData = String(reader.result || '');
+        loadImage(block.imageData);
+        if (block.imgEl) { block.imgEl.src = block.imageData; block.imgEl.hidden = false; }
+        if (block.placeholderEl) block.placeholderEl.hidden = true;
+        setStatus('Imagem inserida.');
+    };
+    reader.readAsDataURL(file);
+}
+
+// Remove um bloco (mapa só se for o último mapa; imagem sempre). Mantém ≥1 mapa.
+function removeBlock(block) {
+    const i = blocks.indexOf(block);
+    if (i < 0) return;
+
+    if (block.type === 'map') {
+        if (scenes.length <= 1) { setStatus('É preciso ter ao menos 1 mapa.'); return; }
+        if (block.scene.index !== scenes.length - 1) {
+            setStatus('Por ora, só o último mapa pode ser removido.');
+            return;
+        }
+        teardownScene(block.scene);
+        scenes.pop();
+        blocks.splice(i, 1);
+        if (activeSceneIndex >= scenes.length) activeSceneIndex = scenes.length - 1;
+        activeBlockId = null;
+        refreshSceneSelectorOptions();
+        refreshSceneVisibility();
+        setActiveScene(activeSceneIndex);
+    } else {
+        if (block.el) block.el.remove();
+        blocks.splice(i, 1);
+        if (activeBlockId === block.id) activeBlockId = null;
+    }
+    updateBlockControls();
+    setStatus(`Bloco removido. ${blocks.length} restante(s).`);
+}
+
+// Remove o bloco atualmente ativo (usado pelo botão "−" central).
+function removeActiveBlock() {
+    if (blocks.length <= 1) { setStatus('É preciso ter ao menos 1 bloco.'); return; }
+    const block = blocks[getActiveBlockIndex()];
+    if (block) removeBlock(block);
+}
+
+// Garante que o array de cenas tenha n mapas (usado ao carregar peças antigas).
 function ensureSceneCount(n) {
     const target = Math.max(1, Math.min(maxScenes, n));
     while (scenes.length < target) scenes.push(createScene(scenes.length));
@@ -553,6 +710,12 @@ function setActiveScene(index) {
     selectedAnnotationId = getActiveScene().editorialLabels[0]?.id || null;
     activeSceneInput.value = String(activeSceneIndex);
     scenes.forEach(scene => scene.sceneEl.classList.toggle('is-active', scene.index === activeSceneIndex));
+    // O bloco do mapa ativo passa a ser o "bloco ativo" (define onde uma nova
+    // imagem é intercalada).
+    if (blocks.length) {
+        const b = blocks.find(block => block.type === 'map' && block.scene === scenes[activeSceneIndex]);
+        if (b) activeBlockId = b.id;
+    }
     syncControlsFromScene();
     renderAnnotationPanel();
     renderDrawingList();
@@ -2087,6 +2250,43 @@ function drawMarker(ctx, scene, offsetY) {
     ctx.restore();
 }
 
+// Desenha um bloco de imagem no canvas (cover + legenda em barra inferior).
+function drawImageBlock(ctx, block, y, h) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, y, outputWidth, h);
+    ctx.clip();
+
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(0, y, outputWidth, h);
+
+    const entry = block.imageData ? imageCache.get(block.imageData) : null;
+    const img = entry && entry.image;
+    if (img && img.width && img.height) {
+        const scale = block.imageFit === 'contain'
+            ? Math.min(outputWidth / img.width, h / img.height)
+            : Math.max(outputWidth / img.width, h / img.height);
+        const dw = img.width * scale;
+        const dh = img.height * scale;
+        ctx.drawImage(img, (outputWidth - dw) / 2, y + (h - dh) / 2, dw, dh);
+    }
+
+    const caption = normalizeText(block.caption);
+    if (caption) {
+        const barH = 32;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(0, y + h - barH, outputWidth, barH);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '18px "Open Sans", Arial, Helvetica, sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.fillText(caption, textPaddingX, y + h - (barH / 2) + 1);
+        ctx.textBaseline = 'top';
+    }
+
+    ctx.restore();
+}
+
 function loadImage(src) {
     if (!src) {
         return Promise.resolve(null);
@@ -2245,6 +2445,12 @@ async function prepareForRender() {
             .filter(editorialLabel => editorialLabel.symbol === 'image' && editorialLabel.imageData)
             .map(editorialLabel => loadImage(editorialLabel.imageData))
     );
+    // Pré-carrega as imagens dos blocos de imagem para o canvas.
+    await Promise.all(
+        blocks
+            .filter(block => block.type === 'image' && block.imageData)
+            .map(block => loadImage(block.imageData))
+    );
     return visibleScenes;
 }
 
@@ -2270,8 +2476,8 @@ function renderPieceCanvas(visibleScenes) {
         const titleHeight = hasTitle ? titleBlock.lines.length * titleBlock.lineHeight : 0;
         const deckHeight = hasDeck ? deckBlock.lines.length * deckBlock.lineHeight : 0;
         const sourceHeight = hasSource ? sourceBlock.lines.length * sourceBlock.lineHeight : 0;
-        const dividersHeight = Math.max(0, visibleScenes.length - 1) * 4;
-        const mapsHeight = visibleScenes.reduce((sum, scene) => sum + scene.height, 0) + dividersHeight;
+        const dividersHeight = Math.max(0, blocks.length - 1) * 4;
+        const mapsHeight = blocks.reduce((sum, block) => sum + blockHeight(block), 0) + dividersHeight;
         const outputHeight = topPadding + titleHeight + gapTitleDeck + deckHeight + gapBeforeMap + mapsHeight + sourceTop + sourceHeight + bottomPadding;
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
@@ -2305,13 +2511,20 @@ function renderPieceCanvas(visibleScenes) {
             y += gapBeforeMap;
         }
 
-        visibleScenes.forEach((scene, index) => {
+        blocks.forEach((block, index) => {
             if (index > 0) {
                 ctx.fillStyle = red;
                 ctx.fillRect(0, y, outputWidth, 4);
                 y += 4;
             }
 
+            if (block.type === 'image') {
+                drawImageBlock(ctx, block, y, blockHeight(block));
+                y += blockHeight(block);
+                return;
+            }
+
+            const scene = block.scene;
             const mapCanvas = scene.map.getCanvas();
             ctx.drawImage(mapCanvas, 0, y, outputWidth, scene.height);
 
@@ -2773,7 +2986,7 @@ async function toggleSmartLabels() {
 }
 
 // ---- Serializacao do estado da peca (Fase 3) ----
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -2817,8 +3030,46 @@ function serializeState() {
                 editorialLabels: clone(scene.editorialLabels),
                 locator: clone(scene.locator)
             };
-        })
+        }),
+        // Ordem da coluna central (mapas e imagens intercalados).
+        blocks: blocks.map(block => block.type === 'map'
+            ? {type: 'map', sceneIndex: block.scene.index}
+            : {
+                type: 'image',
+                imageData: block.imageData,
+                imageFit: block.imageFit,
+                caption: block.caption,
+                height: block.height,
+                annotations: clone(block.annotations || [])
+            })
     };
+}
+
+// Reconstrói o array `blocks` a partir do estado salvo (compatível com v1,
+// que não tinha blocks: cai no fallback de "todos os mapas em ordem").
+function rebuildBlocksFromState(saved) {
+    blocks.filter(b => b.type === 'image' && b.el).forEach(b => b.el.remove());
+    blocks.length = 0;
+    if (Array.isArray(saved)) {
+        saved.forEach(sb => {
+            if (sb.type === 'image') {
+                blocks.push(createImageBlock(sb));
+            } else {
+                const scene = scenes[sb.sceneIndex];
+                if (scene && !blocks.some(b => b.type === 'map' && b.scene === scene)) {
+                    blocks.push({id: blockIdCounter++, type: 'map', scene});
+                }
+            }
+        });
+    }
+    // Garante que todo mapa exista em algum bloco (fallback / robustez).
+    scenes.forEach(scene => {
+        if (!blocks.some(b => b.type === 'map' && b.scene === scene)) {
+            blocks.push({id: blockIdCounter++, type: 'map', scene});
+        }
+    });
+    syncBlocksDom();
+    updateBlockControls();
 }
 
 function whenSceneReady(scene) {
@@ -2876,6 +3127,7 @@ async function applyState(state) {
         }
     });
 
+    rebuildBlocksFromState(state.blocks);
     refreshSceneVisibility();
     await Promise.all(getVisibleScenes().map(whenSceneReady));
     scenes.forEach(scene => {
@@ -2961,6 +3213,18 @@ async function initializeApp() {
 
     // Começa com 1 bloco de mapa; o usuário adiciona os demais pelo botão "+".
     scenes.push(createScene(0));
+    blocks.push({id: blockIdCounter++, type: 'map', scene: scenes[0]});
+
+    // Input de arquivo (oculto) compartilhado pelos blocos de imagem.
+    imageBlockFileInput = document.createElement('input');
+    imageBlockFileInput.type = 'file';
+    imageBlockFileInput.accept = 'image/png,image/jpeg,image/webp';
+    imageBlockFileInput.hidden = true;
+    imageBlockFileInput.addEventListener('change', event => {
+        const file = event.target.files && event.target.files[0];
+        if (file) applyImageFileToBlock(file);
+    });
+    document.body.append(imageBlockFileInput);
 
     window.editorScenes = scenes;
 
@@ -2968,8 +3232,25 @@ async function initializeApp() {
         input.addEventListener('input', setPreviewText);
     });
 
-    if (addSceneButton) addSceneButton.addEventListener('click', addSceneBlock);
-    if (removeSceneButton) removeSceneButton.addEventListener('click', removeSceneBlock);
+    // Botão "+" abre o menu Mapa/Imagem; "−" remove o bloco ativo.
+    if (addSceneButton && addBlockMenu) {
+        addSceneButton.addEventListener('click', event => {
+            event.stopPropagation();
+            addBlockMenu.hidden = !addBlockMenu.hidden;
+        });
+        addBlockMenu.querySelectorAll('[data-add]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                addBlockMenu.hidden = true;
+                if (btn.dataset.add === 'image') addImageBlock(); else addSceneBlock();
+            });
+        });
+        document.addEventListener('click', event => {
+            if (!addBlockMenu.hidden && !addBlockMenu.contains(event.target) && event.target !== addSceneButton) {
+                addBlockMenu.hidden = true;
+            }
+        });
+    }
+    if (removeSceneButton) removeSceneButton.addEventListener('click', removeActiveBlock);
     activeSceneInput.addEventListener('change', event => setActiveScene(Number.parseInt(event.target.value, 10) || 0));
     mapHeightInput.addEventListener('input', event => setSceneHeight(event.target.value));
     heightPresetButtons.forEach(button => {
