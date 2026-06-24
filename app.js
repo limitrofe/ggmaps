@@ -72,6 +72,9 @@ const selectedLabelBgInput = document.getElementById('selected-label-bg-input');
 const selectedLabelBgColorInput = document.getElementById('selected-label-bg-color-input');
 const selectedLabelBgOpacityInput = document.getElementById('selected-label-bg-opacity-input');
 const selectedLabelWidthInput = document.getElementById('selected-label-width-input');
+const selectedLabelColorRow = document.getElementById('selected-label-color-row');
+const selectedLabelColorInput = document.getElementById('selected-label-color-input');
+const selectedLabelFontInput = document.getElementById('selected-label-font-input');
 const locatorModeInput = document.getElementById('locator-mode-input');
 const locatorQueryInput = document.getElementById('locator-query-input');
 const locatorSearchButton = document.getElementById('locator-search-button');
@@ -1083,6 +1086,12 @@ function renderAnnotationPanel() {
     if (selectedLabelBgColorInput) selectedLabelBgColorInput.value = selected.bgColor || '#000000';
     if (selectedLabelBgOpacityInput) selectedLabelBgOpacityInput.value = String(Math.round((selected.bgOpacity ?? 0.6) * 100));
     if (selectedLabelWidthInput) selectedLabelWidthInput.value = String(selected.width || 260);
+    if (selectedLabelFontInput) selectedLabelFontInput.value = selected.fontStyle || 'bold';
+    if (selectedLabelColorInput) selectedLabelColorInput.value = selected.color || (selected.bg ? '#ffffff' : '#232323');
+    if (selectedLabelColorRow) {
+        const cur = (selected.color || '').toLowerCase();
+        selectedLabelColorRow.querySelectorAll('.swatch').forEach(sw => sw.classList.toggle('is-active', sw.dataset.color.toLowerCase() === cur));
+    }
 }
 
 function syncSelectedAnnotation(update) {
@@ -2055,6 +2064,19 @@ function getTextAlignForPosition(position) {
     return 'left';
 }
 
+// Peso/itálico do rótulo a partir do estilo escolhido (regular/bold/italic/bolditalic).
+function labelFontParts(style) {
+    const s = style || 'bold';
+    const italic = s === 'italic' || s === 'bolditalic';
+    const weight = (s === 'regular' || s === 'italic') ? 400 : 800;
+    return {italic, weight};
+}
+
+// Cor do texto do rótulo (default: branco sobre tarja, escuro sem tarja).
+function labelTextColor(label) {
+    return label.color || (label.bg ? '#ffffff' : '#232323');
+}
+
 function addEditorialLabelToActiveScene(lngLat) {
     const scene = getActiveScene();
     const text = normalizeText(editorialLabelInput.value);
@@ -2676,9 +2698,12 @@ function updateSceneAnnotation(scene) {
             text.style.top = `${editorialLabel.offsetY}px`;
             text.style.textAlign = getTextAlignForPosition(editorialLabel.textPosition);
             text.style.maxWidth = `${editorialLabel.width || 260}px`;
+            const fp = labelFontParts(editorialLabel.fontStyle);
+            text.style.fontWeight = String(fp.weight);
+            text.style.fontStyle = fp.italic ? 'italic' : 'normal';
+            text.style.color = labelTextColor(editorialLabel);
             if (editorialLabel.bg) {
                 text.style.background = hexToRgba(editorialLabel.bgColor || '#000000', editorialLabel.bgOpacity ?? 0.6);
-                text.style.color = '#ffffff';
                 text.style.padding = '2px 6px';
                 text.style.borderRadius = '4px';
             }
@@ -3046,7 +3071,10 @@ function drawEditorialLabels(ctx, scene, offsetY) {
         const labelLeft = editorialLabel.textPosition === 'left' || x + editorialLabel.offsetX > outputWidth - 220;
         const labelX = x + editorialLabel.offsetX;
         const labelY = y + editorialLabel.offsetY;
-        const labelLines = measureBlock(ctx, editorialLabel.text, editorialLabelFont, 23, editorialLabel.width || 260).lines;
+        const fp = labelFontParts(editorialLabel.fontStyle);
+        const labelFontStr = `${fp.italic ? 'italic ' : ''}${fp.weight} 20px "Open Sans"`;
+        const labelColor = labelTextColor(editorialLabel);
+        const labelLines = measureBlock(ctx, editorialLabel.text, labelFontStr, 23, editorialLabel.width || 260).lines;
 
         ctx.save();
         if (editorialLabel.symbol === 'image' && editorialLabel.imageData) {
@@ -3063,7 +3091,7 @@ function drawEditorialLabels(ctx, scene, offsetY) {
         }
 
         if (normalizeText(editorialLabel.text)) {
-            ctx.font = editorialLabelFont;
+            ctx.font = labelFontStr;
             ctx.textBaseline = 'top';
             const align = getTextAlignForPosition(editorialLabel.textPosition) || (labelLeft ? 'right' : 'left');
             ctx.textAlign = align;
@@ -3087,7 +3115,7 @@ function drawEditorialLabels(ctx, scene, offsetY) {
                 } else {
                     ctx.fillRect(rx - padX, labelY - padY, bw, bh);
                 }
-                ctx.fillStyle = '#ffffff';
+                ctx.fillStyle = labelColor;
                 labelLines.forEach((line, index) => ctx.fillText(line, labelX, labelY + index * lineH));
             } else {
                 labelLines.forEach((line, index) => {
@@ -3095,7 +3123,7 @@ function drawEditorialLabels(ctx, scene, offsetY) {
                     ctx.lineWidth = 4;
                     ctx.strokeStyle = '#ffffff';
                     ctx.strokeText(line, labelX, lineY);
-                    ctx.fillStyle = '#2f3033';
+                    ctx.fillStyle = labelColor;
                     ctx.fillText(line, labelX, lineY);
                 });
             }
@@ -4113,6 +4141,18 @@ async function initializeApp() {
     });
     if (selectedLabelWidthInput) selectedLabelWidthInput.addEventListener('input', event => {
         syncSelectedAnnotation(annotation => { annotation.width = Math.max(80, Math.min(600, Number(event.target.value) || 260)); });
+    });
+    if (selectedLabelColorRow) selectedLabelColorRow.querySelectorAll('.swatch').forEach(sw => {
+        sw.addEventListener('click', () => {
+            syncSelectedAnnotation(annotation => { annotation.color = sw.dataset.color; });
+            if (selectedLabelColorInput) selectedLabelColorInput.value = sw.dataset.color;
+        });
+    });
+    if (selectedLabelColorInput) selectedLabelColorInput.addEventListener('input', event => {
+        syncSelectedAnnotation(annotation => { annotation.color = event.target.value; });
+    });
+    if (selectedLabelFontInput) selectedLabelFontInput.addEventListener('change', event => {
+        syncSelectedAnnotation(annotation => { annotation.fontStyle = event.target.value; });
     });
     editorialImageInput.addEventListener('change', event => {
         const file = event.target.files?.[0];
