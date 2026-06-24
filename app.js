@@ -286,7 +286,15 @@ function createScene(index) {
             return;
         }
 
-        setCustomMarkerForActiveScene(event.lngLat);
+        // No modo "ponto manual" (painel direito), o clique marca direto.
+        if (canSetCustomMarker(scene)) {
+            setCustomMarkerForActiveScene(event.lngLat);
+            return;
+        }
+
+        // Caso contrário, clique em área livre abre o menu de contexto
+        // (texto/ícone/imagem/desenho/marcador) preso à lat/long clicada.
+        openMapContextMenu(scene, event);
     });
 
     scene.map.on('dblclick', event => {
@@ -2079,6 +2087,88 @@ function addEditorialLabelToActiveScene(lngLat) {
     setStatus(`Elemento manual adicionado na cena ${scene.index + 1}.`);
 }
 
+// Cria uma anotação editorial na cena ativa com símbolo/texto explícitos
+// (usado pelo menu de contexto do clique no mapa).
+function addAnnotationAt(lngLat, symbol, text = '') {
+    const scene = getActiveScene();
+    const textPosition = 'right';
+    const offset = getDefaultLabelOffset(textPosition);
+    const annotation = {
+        id: `annotation-${annotationIdCounter++}`,
+        lng: lngLat.lng,
+        lat: lngLat.lat,
+        text,
+        symbol,
+        imageData: symbol === 'image' ? editorialImageData : '',
+        textPosition,
+        offsetX: offset.x,
+        offsetY: offset.y
+    };
+    scene.editorialLabels.push(annotation);
+    selectedAnnotationId = annotation.id;
+    updateSceneAnnotation(scene);
+    renderAnnotationPanel();
+    return annotation;
+}
+
+// ---- Menu de contexto ao clicar em área livre do mapa ----
+let mapContextMenu = null;
+let mapMenuLngLat = null;
+let mapMenuPoint = null;
+let pendingContextImage = false;
+
+function onMapMenuDocClick(event) {
+    if (mapContextMenu && !mapContextMenu.contains(event.target)) hideMapContextMenu();
+}
+
+function hideMapContextMenu() {
+    if (mapContextMenu) mapContextMenu.hidden = true;
+    document.removeEventListener('click', onMapMenuDocClick, true);
+}
+
+function openMapContextMenu(scene, event) {
+    if (!mapContextMenu) return;
+    mapMenuLngLat = event.lngLat;
+    mapMenuPoint = event.point;
+    const oe = event.originalEvent;
+    mapContextMenu.style.left = `${oe.clientX}px`;
+    mapContextMenu.style.top = `${oe.clientY}px`;
+    mapContextMenu.hidden = false;
+    // Fecha ao clicar fora (no próximo tique, para não fechar no clique atual).
+    setTimeout(() => document.addEventListener('click', onMapMenuDocClick, true), 0);
+}
+
+function handleMapContextAction(action) {
+    const lngLat = mapMenuLngLat;
+    hideMapContextMenu();
+    if (!lngLat) return;
+    const scene = getActiveScene();
+
+    if (action === 'text') {
+        addAnnotationAt(lngLat, 'none', 'Novo texto');
+        if (selectedLabelTextInput) { selectedLabelTextInput.focus(); selectedLabelTextInput.select(); }
+        setStatus('Texto inserido. Edite no painel Anotações.');
+    } else if (action === 'icon') {
+        addAnnotationAt(lngLat, 'dot', '');
+        setStatus('Ícone inserido. Ajuste no painel Anotações.');
+    } else if (action === 'image') {
+        if (editorialImageData) {
+            addAnnotationAt(lngLat, 'image', '');
+            setStatus('Imagem inserida no ponto.');
+        } else {
+            pendingContextImage = true;
+            editorialImageInput.click();
+            setStatus('Escolha um PNG para inserir no ponto.');
+        }
+    } else if (action === 'draw') {
+        setDrawingMode(scene.index);
+        addDrawingPoint(scene, lngLat, mapMenuPoint);
+        setStatus('Linha iniciada. Clique para adicionar pontos; duplo clique finaliza.');
+    } else if (action === 'marker') {
+        setCustomMarkerForActiveScene(lngLat);
+    }
+}
+
 function clearEditorialLabelsForActiveScene() {
     const scene = getActiveScene();
 
@@ -3786,6 +3876,28 @@ async function initializeApp() {
     });
     document.body.append(imageBlockFileInput);
 
+    // Menu de contexto do clique no mapa.
+    mapContextMenu = document.createElement('div');
+    mapContextMenu.className = 'map-context-menu';
+    mapContextMenu.hidden = true;
+    [
+        ['text', 'Texto'],
+        ['icon', 'Ícone'],
+        ['image', 'Imagem'],
+        ['draw', 'Desenho'],
+        ['marker', 'Marcador']
+    ].forEach(([action, label]) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.addEventListener('click', event => {
+            event.stopPropagation();
+            handleMapContextAction(action);
+        });
+        mapContextMenu.append(btn);
+    });
+    document.body.append(mapContextMenu);
+
     window.editorScenes = scenes;
 
     [titleInput, deckInput, sourceInput].forEach(input => {
@@ -3938,6 +4050,15 @@ async function initializeApp() {
         reader.onload = () => {
             editorialImageData = String(reader.result || '');
             loadImage(editorialImageData);
+
+            // Veio do menu de contexto: insere a imagem no ponto clicado.
+            if (pendingContextImage && mapMenuLngLat) {
+                pendingContextImage = false;
+                addAnnotationAt(mapMenuLngLat, 'image', '');
+                setStatus('Imagem inserida no ponto.');
+                return;
+            }
+
             const selected = getSelectedAnnotation();
 
             if (selected?.symbol === 'image') {
