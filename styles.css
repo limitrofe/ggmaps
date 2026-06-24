@@ -581,6 +581,43 @@ select:disabled {
     color: var(--accent);
 }
 
+/* Alça de arraste para reordenar blocos */
+.block-drag-grip {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 8;
+    width: 46px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #ffffff;
+    font-size: 14px;
+    cursor: grab;
+    touch-action: none;
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
+}
+
+.map-scene:hover .block-drag-grip,
+.image-scene:hover .block-drag-grip {
+    opacity: 1;
+}
+
+.block-drag-grip:active {
+    cursor: grabbing;
+}
+
+.is-dragging {
+    opacity: 0.5;
+    outline: 2px dashed var(--accent);
+    outline-offset: -2px;
+}
+
 /* Bloco de imagem na coluna central */
 .image-scene {
     position: relative;
@@ -673,6 +710,70 @@ select:disabled {
     border: none;
     background: none;
     cursor: pointer;
+}
+
+.image-scene__controls {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 6;
+}
+
+.image-scene__fit {
+    border: none;
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.image-scene__fit:hover {
+    background: rgba(255, 255, 255, 0.32);
+}
+
+.image-scene__opacity {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+}
+
+.image-scene__opacity input {
+    width: 70px;
+}
+
+.image-scene__height {
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: 56px;
+    height: 12px;
+    border-radius: 6px 6px 0 0;
+    background: rgba(0, 0, 0, 0.45);
+    cursor: ns-resize;
+    z-index: 6;
+}
+
+.image-scene__height::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 4px;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.7);
 }
 
 .image-scene__remove {

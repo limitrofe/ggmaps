@@ -212,6 +212,7 @@ function createScene(index) {
     svgEl.setAttribute('class', 'drawing-layer');
     scene.svgEl = svgEl;
     sceneEl.append(mapEl, svgEl, annotationEl, locatorEl);
+    sceneEl.append(makeDragGrip(() => blocks.find(b => b.type === 'map' && b.scene === scene)));
     mapsStack.append(sceneEl);
 
     scene.map = new mapboxgl.Map({
@@ -397,6 +398,56 @@ function moveActiveBlock(dir) {
     if (block) moveBlock(block, dir);
 }
 
+// Arraste de reordenação (pointer): determina a posição-alvo pela coordenada Y
+// em relação ao meio de cada bloco; reordena ao soltar.
+function startBlockDrag(block, event) {
+    event.preventDefault();
+    activeBlockId = block.id;
+    const draggedEl = blockEl(block);
+    if (draggedEl) draggedEl.classList.add('is-dragging');
+    let target = blocks.indexOf(block);
+    const move = ev => {
+        const y = ev.clientY;
+        let t = blocks.length;
+        for (let i = 0; i < blocks.length; i += 1) {
+            const r = blockEl(blocks[i]).getBoundingClientRect();
+            if (y < r.top + r.height / 2) { t = i; break; }
+        }
+        target = t;
+    };
+    const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        if (draggedEl) draggedEl.classList.remove('is-dragging');
+        const cur = blocks.indexOf(block);
+        let dest = target > cur ? target - 1 : target; // ajusta pela remoção
+        dest = Math.max(0, Math.min(blocks.length - 1, dest));
+        if (dest !== cur) {
+            blocks.splice(cur, 1);
+            blocks.splice(dest, 0, block);
+            syncBlocksDom();
+            refreshSceneSelectorOptions();
+            updateBlockControls();
+            setStatus('Bloco reposicionado.');
+        }
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+}
+
+// Cria a alça de arraste para reordenar (resolveBlock devolve o bloco atual).
+function makeDragGrip(resolveBlock) {
+    const g = document.createElement('div');
+    g.className = 'block-drag-grip';
+    g.title = 'Arraste para reordenar';
+    g.textContent = '⇕';
+    g.addEventListener('pointerdown', ev => {
+        const block = resolveBlock();
+        if (block) startBlockDrag(block, ev);
+    });
+    return g;
+}
+
 // Altura (px) que um bloco ocupa no preview/export.
 function blockHeight(block) {
     return block.type === 'image' ? (block.height || IMAGE_BLOCK_DEFAULT_HEIGHT) : block.scene.height;
@@ -479,6 +530,7 @@ function createImageBlock(data = {}) {
         captionY: typeof data.captionY === 'number' ? data.captionY : 80,
         captionW: typeof data.captionW === 'number' ? data.captionW : 45,
         captionBg: data.captionBg || '#000000',
+        captionOpacity: typeof data.captionOpacity === 'number' ? data.captionOpacity : 0.6,
         height: data.height || IMAGE_BLOCK_DEFAULT_HEIGHT,
         annotations: Array.isArray(data.annotations) ? clone(data.annotations) : []
     };
@@ -493,6 +545,7 @@ function createImageBlock(data = {}) {
     const img = document.createElement('img');
     img.className = 'image-scene__img';
     img.alt = '';
+    img.style.objectFit = block.imageFit;
     if (block.imageData) img.src = block.imageData; else img.hidden = true;
 
     const placeholder = document.createElement('button');
@@ -533,7 +586,7 @@ function createImageBlock(data = {}) {
         caption.style.left = `${block.captionX}%`;
         caption.style.top = `${block.captionY}%`;
         caption.style.width = `${block.captionW}%`;
-        caption.style.background = hexToRgba(block.captionBg, 0.6);
+        caption.style.background = hexToRgba(block.captionBg, block.captionOpacity);
         autoSize();
     };
     captionColor.addEventListener('input', () => {
@@ -589,6 +642,62 @@ function createImageBlock(data = {}) {
     removeBtn.textContent = '×';
     removeBtn.addEventListener('click', event => { event.stopPropagation(); removeBlock(block); });
 
+    // Barra de ajustes: cobrir/conter + opacidade da tarja.
+    const controls = document.createElement('div');
+    controls.className = 'image-scene__controls';
+
+    const fitBtn = document.createElement('button');
+    fitBtn.type = 'button';
+    fitBtn.className = 'image-scene__fit';
+    fitBtn.title = 'Alternar entre cobrir e conter';
+    const updateFitLabel = () => { fitBtn.textContent = block.imageFit === 'contain' ? 'Conter' : 'Cobrir'; };
+    updateFitLabel();
+    fitBtn.addEventListener('click', event => {
+        event.stopPropagation();
+        block.imageFit = block.imageFit === 'cover' ? 'contain' : 'cover';
+        img.style.objectFit = block.imageFit;
+        updateFitLabel();
+    });
+
+    const opacityWrap = document.createElement('label');
+    opacityWrap.className = 'image-scene__opacity';
+    opacityWrap.title = 'Opacidade da tarja da legenda';
+    const opacityIcon = document.createElement('span');
+    opacityIcon.textContent = '▦';
+    const opacity = document.createElement('input');
+    opacity.type = 'range';
+    opacity.min = '0';
+    opacity.max = '100';
+    opacity.value = String(Math.round(block.captionOpacity * 100));
+    opacity.addEventListener('input', () => {
+        block.captionOpacity = Number(opacity.value) / 100;
+        applyCaptionStyle();
+    });
+    opacityWrap.append(opacityIcon, opacity);
+    controls.append(fitBtn, opacityWrap);
+
+    // Alça inferior para ajustar a altura do bloco.
+    const heightHandle = document.createElement('div');
+    heightHandle.className = 'image-scene__height';
+    heightHandle.title = 'Arraste para mudar a altura';
+    heightHandle.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        activeBlockId = block.id;
+        const startY = event.clientY;
+        const startH = block.height;
+        const move = ev => {
+            block.height = Math.max(120, Math.min(1200, startH + (ev.clientY - startY)));
+            el.style.height = `${block.height}px`;
+        };
+        const up = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+
     const openPicker = () => {
         pendingImageBlock = block;
         activeBlockId = block.id;
@@ -599,7 +708,7 @@ function createImageBlock(data = {}) {
     el.addEventListener('mousedown', () => { activeBlockId = block.id; updateBlockControls(); });
 
     inner.append(img, placeholder);
-    el.append(inner, caption, removeBtn);
+    el.append(inner, caption, controls, removeBtn, heightHandle, makeDragGrip(() => block));
     applyCaptionStyle();
 
     block.el = el;
@@ -3188,6 +3297,7 @@ function serializeState() {
                 captionY: block.captionY,
                 captionW: block.captionW,
                 captionBg: block.captionBg,
+                captionOpacity: block.captionOpacity,
                 height: block.height,
                 annotations: clone(block.annotations || [])
             })
